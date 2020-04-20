@@ -1,16 +1,14 @@
-### Agent 1 ###
-
 import numpy as np
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F 
 from torch.distributions import Categorical
 
+from RelationalModule.AC_networks import OheActor, OheCritic #custom module
+from RelationalModule.RAdam import RAdam
+
 from pysc2.lib import actions
 from pysc2.lib import features
-
-from RelationalModule.MLP_AC_networks import Actor, Critic #custom module
 
 # indexes of useful layers of the screen_features
 _PLAYER_RELATIVE = features.SCREEN_FEATURES.player_relative.index 
@@ -35,78 +33,94 @@ _NOT_QUEUED = [0]
 
 debug = False
 
-class MoveToBeaconA2C():
+class MoveToBeaconOheA2C():
     """
     Advantage Actor-Critic RL agent for BoxWorld environment described in the paper
     Relational Deep Reinforcement Learning.
     
     Notes
     -----
-    * GPU implementation is still work in progress.
     * Always uses 2 separate networks for the critic,one that learns from new experience 
       (student/critic) and the other one (critic_target/teacher)that is more conservative 
       and whose weights are updated through an exponential moving average of the weights 
       of the critic, i.e.
           target.params = (1-tau)*target.params + tau* critic.params
     * In the case of Monte Carlo estimation the critic_target is never used
+    * Monte Carlo estimation is no longer mantained, I'm not sure it works out of the box
     * Possible to use twin networks for the critic and the critic target for improved 
       stability. Critic target is used for updates of both the actor and the critic and
       its output is the minimum between the predictions of its two internal networks.
       
     """ 
     
-    def __init__(self, action_space, observation_space, lr, gamma, TD=True, twin=False, tau = 1., 
-                 H=1e-2, n_steps = 1, device='cpu', **control_net_args):
+    def __init__(self, action_space, map_size, lr, gamma, TD=True, twin=True, tau = 0.3, 
+                 H=1e-3, n_steps = 1, device='cpu', actor_lr=None, critic_lr=None, radam=False, **net_args):
         """
         Parameters
         ----------
+        action_space: int
+            Number of (discrete) possible actions to take
         lr: float in [0,1]
             Learning rate
         gamma: float in [0,1]
             Discount factor
-        TD: bool (default=True)
+        TD: bool (default True)
             If True, uses Temporal Difference for the critic's estimates
-            Otherwise uses Monte Carlo estimation
-        twin: bool (default=False)
+            Otherwise uses Monte Carlo estimation 
+        twin: bool (default True)
             Enables twin networks both for critic and critic_target
-        tau: float in [0,1] (default = 1.)
+        tau: float in [0,1] (default = 0.3)
             Regulates how fast the critic_target gets updates, i.e. what percentage of the weights
             inherits from the critic. If tau=1., critic and critic_target are identical 
             at every step, if tau=0. critic_target is unchangable. 
-            As a default this feature is disabled setting tau = 1, but if one wants to use it a good
-            empirical value is 0.005.
-        H: float (default 1e-2)
+        H: float (default 1e-3)
             Entropy multiplicative factor in actor's loss
-        n_steps: int (default=1)
+        n_steps: int (default 1)
             Number of steps considered in TD update
         device: str in {'cpu','cuda'}
-            Implemented, but GPU slower than CPU because it's difficult to optimize a RL agent without
-            a replay buffer, that can be used only in off-policy algorithms.
+            Whether to use CPU or GPU
+        radam: bool (default False)
+            If True, uses RAdam optimizer instead of Adam
+        **net_args: dict (optional)
+            Dictionary of {'key':value} pairs valid for OheNet.
+            
         """
         
         self.gamma = gamma
         self.lr = lr
         
+        self.n_actions = action_space
         self.TD = TD
         self.twin = twin 
         self.tau = tau
         self.n_steps = n_steps
         self.H = H
         
-        if debug: print("control_net_args: ", control_net_args)
-            
-        self.actor = Actor(action_space, observation_space, **control_net_args)
-        self.critic = Critic(observation_space, twin=twin, **control_net_args)
+        self.actor = OheActor(action_space, map_size, **net_args)
+        self.critic = OheCritic(map_size, twin, **net_args)
         
         if self.TD:
-            self.critic_trg = Critic(observation_space, target=True, twin=twin, **control_net_args)
+            self.critic_trg = OheCritic(map_size, twin, target=True, **net_args)
 
             # Init critic target identical to critic
             for trg_params, params in zip(self.critic_trg.parameters(), self.critic.parameters()):
                 trg_params.data.copy_(params.data)
             
-        self.actor_optim = torch.optim.Adam(self.actor.parameters(), lr=lr)
-        self.critic_optim = torch.optim.Adam(self.critic.parameters(), lr=lr)
+        if radam:
+            self.optimizer = RAdam
+        else:
+            self.optimizer = torch.optim.Adam
+
+
+        if actor_lr is not None:
+            self.actor_optim = self.optimizer(self.actor.parameters(), lr=actor_lr)
+        else:
+            self.actor_optim = self.optimizer(self.actor.parameters(), lr=lr)
+        
+        if critic_lr is not None:
+            self.critic_optim = self.optimizer(self.critic.parameters(), lr=critic_lr)
+        else:
+            self.critic_optim = self.optimizer(self.critic.parameters(), lr=lr)
         
         self.device = device 
         self.actor.to(self.device) 
@@ -118,6 +132,7 @@ class MoveToBeaconA2C():
             print("="*10 +" A2C HyperParameters "+"="*10)
             print("Discount factor: ", self.gamma)
             print("Learning rate: ", self.lr)
+            print("Action space: ", self.n_actions)
             print("Temporal Difference learning: ", self.TD)
             print("Twin networks: ", self.twin)
             print("Update critic target factor: ", self.tau)
@@ -135,16 +150,17 @@ class MoveToBeaconA2C():
         
     def step(self, obs, return_log=False):
         
-        state = self.get_coord_state(obs)
-        if debug: print("state: ", state)
-        state = torch.tensor(state).float().to(self.device)
+        state = self.get_ohe_state(obs)
+        state = torch.from_numpy(state).float().to(self.device)
         available_actions = obs[0].observation.available_actions
         if debug: print("available actions: ", available_actions)
-        
+            
         log_probs = self.actor(state, available_actions)
         if debug: print("log_probs: ", log_probs)
+            
         probs = torch.exp(log_probs)
         if debug: print("probs: ", probs)
+            
         distribution = Categorical(probs)
         a = distribution.sample().item()
         
@@ -158,34 +174,21 @@ class MoveToBeaconA2C():
             return action
     
     @staticmethod
-    def get_coord_state(obs):
-        
+    def get_ohe_state(obs):
+    
         player_relative = obs[0].observation['feature_screen'][_PLAYER_RELATIVE]
-        if debug: print("player_relative: \n", player_relative)
-            
-        beacon_ys, beacon_xs = (player_relative == _PLAYER_NEUTRAL).nonzero()
-        player_y, player_x = (player_relative == _PLAYER_FRIENDLY).nonzero()
-        
-        if beacon_ys.any():
-            beacon_pos = [beacon_xs.mean(), beacon_ys.mean()]
-        else:
-            beacon_pos = [-1., -1.] # not present
-        
-        if player_y.any():
-            player_pos = [player_x.mean(), player_y.mean()]
-        else:
-            player_pos = beacon_pos # if the two are superimposed, only beacon cells are showed
-            
-        beacon_exists = float(beacon_ys.any())
+        selected = obs[0].observation['feature_screen'][_SELECTED].astype(float)
 
-        selected = obs[0].observation['feature_screen'][_SELECTED]
-        if debug: print("selected layer: \n", selected)
-        is_selected = np.any((selected==1).nonzero()[0]).astype(float) 
+        friendly = (player_relative == _PLAYER_FRIENDLY).astype(float)
+        neutral = (player_relative == _PLAYER_NEUTRAL).astype(float)
 
-        state = np.concatenate([player_pos, beacon_pos, [beacon_exists, is_selected]])
+        state = np.zeros((3,)+player_relative.shape).astype(float)
+        state[0] = friendly
+        state[1] = neutral
+        state[2] = selected
 
         return state
-
+    
     @staticmethod
     def get_scripted_arguments(action_id, obs):
     
@@ -214,8 +217,7 @@ class MoveToBeaconA2C():
             args = [] # _NO_OP case
         
         return args
-
-    
+        
     def update(self, *args):
         if self.TD:
             return self.update_TD(*args)
