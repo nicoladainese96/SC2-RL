@@ -170,4 +170,87 @@ class OheNet(nn.Module):
         return x     
         
         
+### Network used for parameters sampling starting from array-like state representation ###
+
+class CategoricalNet(nn.Module):
+    
+    def __init__(self, n_features, size, hiddens=[32,16]):
+        super(CategoricalNet, self).__init__()
+        layers = []
         
+        layers.append(nn.Linear(n_features, hiddens[0]))
+        layers.append(nn.ReLU())
+            
+        for i in range(0,len(hiddens)-1):
+            layers.append(nn.Linear(hiddens[i], hiddens[i+1]))
+            layers.append(nn.ReLU())
+        
+        layers.append(nn.Linear(hiddens[-1], size))
+        self.net = nn.Sequential(*layers)
+        
+    def forward(self, state_rep):
+        logits = self.net(state_rep)
+        log_probs = F.log_softmax(logits, dim=(-1))
+        probs = torch.exp(log_probs)
+        distribution = Categorical(probs)
+        arg = distribution.sample().item() 
+        return arg, log_probs.view(-1)[arg], probs
+    
+class SpatialNet(nn.Module):
+    
+    def __init__(self, n_features, size=[16,16], n_channels=12):
+        super(SpatialNet, self).__init__()
+        
+        self.size = size[0]
+        
+        self.linear = nn.Linear(n_features, (size[0]-6)*(size[1]-6))
+        
+        self.conv_block = nn.Sequential(
+                                        nn.ConvTranspose2d(in_channels=1, 
+                                                           out_channels=n_channels, 
+                                                            kernel_size=3),
+                                        nn.ReLU(),
+                                        nn.ConvTranspose2d(in_channels=n_channels, 
+                                                           out_channels=n_channels, 
+                                                           kernel_size=3),
+                                        nn.ReLU(),
+                                        nn.ConvTranspose2d(in_channels=n_channels, 
+                                                              out_channels=n_channels, 
+                                                              kernel_size=3)
+                                        )
+        
+    def forward(self, state_rep):
+        if debug: print("state_rep.shape: ", state_rep.shape)
+            
+        x = F.relu(self.linear(state_rep))
+        if debug: print("x.shape (after linear): ", x.shape)
+            
+        x = x.reshape(x.shape[0], 1, size[0]-6, size[1]-6)
+        if debug: print("x.shape (after reshape): ", x.shape)
+            
+        x = self.conv_block(x)
+        if debug: print("x.shape (after conv block): ", x.shape)
+            
+        x, _ = torch.max(x, axis=1)
+        if debug: print("x.shape (after maxpool): ", x.shape)
+            
+        x = x.reshape(x.shape[:-2]+(-1,))
+        
+        log_probs = F.log_softmax(x, dim=(-1))
+        if debug: 
+            print("log_probs.shape: ", log_probs.shape)
+            print("log_probs.shape (reshaped): ", log_probs.view(self.size, self.size).shape)
+        probs = torch.exp(log_probs)
+        
+        # assume squared space
+        x_lin = torch.arange(self.size)
+        xx = x_lin.repeat(self.size,1)
+        args = torch.cat([xx.view(self.size,self.size,1), xx.T.view(self.size,self.size,1)], axis=2)
+        args = args.reshape(-1,2)
+        
+        distribution = Categorical(probs)
+        index = distribution.sample().item() # detaching it, is it okay? maybe...
+        arg = args[index] # and this are the sampled coordinates
+        arg = arg.detach().numpy()
+        
+        return arg, log_probs.view(self.size, self.size)[arg[0], arg[1]], probs
