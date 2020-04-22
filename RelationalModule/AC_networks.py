@@ -86,8 +86,8 @@ class OheParamActor(nn.Module):
         self.arguments_networks = {}
         self.arguments_dict = {}
 
-        for a in action_dict:
-            action = self.all_actions[action_dict[a]]
+        for a in self.action_dict:
+            action = self.all_actions[self.action_dict[a]]
             args = action.args
 
             for arg in args:
@@ -119,23 +119,7 @@ class OheParamActor(nn.Module):
         return log_probs, out
      
     def sample_param(self, state_rep, arg_name):
-        return self.arguments_networks['arg_name'](state_rep)
-    
-    ## Check this !!
-    def get_arguments(self, state_rep, action_id):
-        action = self.all_actions[action_id]
-        list_of_args = action.args
-        
-        args = []
-        log_probs = []
-        for arg in list_of_args:
-            arg_sampled, log_prob, _ = self.sample_param(state_rep, arg.name)
-            args.append(arg_sampled)
-            log_probs.append(log_prob)
-            
-        log_prob = torch.stack(log_probs).sum()
-        
-        return args, log_prob
+        return self.arguments_networks[arg_name](state_rep)
         
     def get_action_mask(self, available_actions):
         action_mask = ~np.array([self.action_dict[i] in available_actions for i in self.action_dict.keys()])
