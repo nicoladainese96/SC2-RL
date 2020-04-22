@@ -2,6 +2,7 @@ import numpy as np
 import torch 
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.distributions import Categorical
 
 debug = False
 
@@ -194,7 +195,7 @@ class CategoricalNet(nn.Module):
         probs = torch.exp(log_probs)
         distribution = Categorical(probs)
         arg = distribution.sample().item() 
-        return arg, log_probs.view(-1)[arg], probs
+        return [arg], log_probs.view(-1)[arg], probs
     
 class SpatialNet(nn.Module):
     
@@ -225,7 +226,7 @@ class SpatialNet(nn.Module):
         x = F.relu(self.linear(state_rep))
         if debug: print("x.shape (after linear): ", x.shape)
             
-        x = x.reshape(x.shape[0], 1, size[0]-6, size[1]-6)
+        x = x.reshape(x.shape[0], 1, self.size-6, self.size-6)
         if debug: print("x.shape (after reshape): ", x.shape)
             
         x = self.conv_block(x)
@@ -251,6 +252,6 @@ class SpatialNet(nn.Module):
         distribution = Categorical(probs)
         index = distribution.sample().item() # detaching it, is it okay? maybe...
         arg = args[index] # and this are the sampled coordinates
-        arg = arg.detach().numpy()
+        arg = list(arg.detach().numpy())
         
         return arg, log_probs.view(self.size, self.size)[arg[0], arg[1]], probs

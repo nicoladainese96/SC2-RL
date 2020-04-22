@@ -1,4 +1,6 @@
 import numpy as np
+import itertools
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F 
@@ -111,11 +113,14 @@ class MoveToBeaconParamA2C():
         else:
             self.optimizer = torch.optim.Adam
 
+        # need to pass them by hand, because the argument networks' parameters are not read automatically
+        actor_params = [self.actor.parameters()]+[self.actor.arguments_networks[key].parameters() 
+                                     for key in self.actor.arguments_networks]
 
         if actor_lr is not None:
-            self.actor_optim = self.optimizer(self.actor.parameters(), lr=actor_lr)
+            self.actor_optim = self.optimizer(itertools.chain(*actor_params), lr=actor_lr)
         else:
-            self.actor_optim = self.optimizer(self.actor.parameters(), lr=lr)
+            self.actor_optim = self.optimizer(itertools.chain(*actor_params), lr=lr)
         
         if critic_lr is not None:
             self.critic_optim = self.optimizer(self.critic.parameters(), lr=critic_lr)
@@ -153,7 +158,7 @@ class MoveToBeaconParamA2C():
         state = self.get_ohe_state(obs)
         state = torch.from_numpy(state).float().to(self.device)
         available_actions = obs[0].observation.available_actions
-        if debug: print("available actions: ", available_actions)
+        if debug: print("\navailable actions: ", available_actions)
             
         log_probs, state_rep = self.actor(state, available_actions)
         if debug: 
@@ -167,15 +172,23 @@ class MoveToBeaconParamA2C():
         distribution = Categorical(probs)
         a = distribution.sample().item()
         log_prob = log_probs.view(-1)[a]
+        if debug: print("log_prob: ", log_prob)
         
         action_id = self.actor.action_dict[a]
-        
+        if debug: print("action_id: ", action_id)
+            
         args, args_log_prob = self.get_arguments(state_rep, action_id)
+        if debug: print("args: ", args)
         
-        # TODO: sum args_log_prob to log_prob
-        
+        if args_log_prob is not None:
+            log_prob = log_prob + args_log_prob
+            if debug: 
+                print("args_log_prob: ", args_log_prob)
+                print("log_prob (after sum): ", log_prob)
+                
         action = actions.FunctionCall(action_id, args)
-        
+        if debug: print("action: ", action)
+            
         if return_log:
             return action, log_prob, probs
         else:
@@ -197,34 +210,23 @@ class MoveToBeaconParamA2C():
 
         return state
     
-    @staticmethod
-    def get_scripted_arguments(action_id, obs):
-    
-        if action_id == _SELECT_ARMY:
-            args = [_SELECT_ALL]
-            
-        elif action_id == _MOVE_SCREEN:
-            player_relative = obs[0].observation['feature_screen'][_PLAYER_RELATIVE]
-            
-            player_y, player_x = (player_relative == _PLAYER_FRIENDLY).nonzero()
-            beacon_ys, beacon_xs = (player_relative == _PLAYER_NEUTRAL).nonzero()
-            
-            if player_y.any():
-                player_pos = [int(player_x.mean()), int(player_y.mean())]
-            else:
-                player_pos = [int(beacon_xs.mean()), int(beacon_ys.mean())]
- 
-            if beacon_ys.any():
-                coord = [int(beacon_xs.mean()), int(beacon_ys.mean())]
-            else:
-                coord = player_pos
-                
-            args = [_NOT_QUEUED, coord]
+    def get_arguments(self, state_rep, action_id):
+        action = self.actor.all_actions[action_id]
+        list_of_args = action.args
+        
+        args = []
+        if len(list_of_args) != 0:
+            log_probs = []
+            for arg in list_of_args:
+                arg_sampled, log_prob, _ = self.actor.sample_param(state_rep, arg.name)
+                args.append(arg_sampled)
+                log_probs.append(log_prob)
+            log_prob = torch.stack(log_probs).sum()
             
         else:
-            args = [] # _NO_OP case
-        
-        return args
+            log_prob = None
+            
+        return args, log_prob
         
     def update(self, *args):
         if self.TD:
