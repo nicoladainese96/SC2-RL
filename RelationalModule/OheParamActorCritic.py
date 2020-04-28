@@ -165,6 +165,8 @@ class MoveToBeaconParamA2C():
             print("log_probs: ", log_probs)
             print("state_rep.shape: ", state_rep.shape)
             print("state_rep: ", state_rep)
+            print("state_rep (cuda): ", state_rep.is_cuda)
+            
             
         probs = torch.exp(log_probs)
         if debug: print("probs: ", probs)
