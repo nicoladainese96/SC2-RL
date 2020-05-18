@@ -5,6 +5,14 @@ import numpy as np
 
 from pysc2.env import sc2_env
 from pysc2.lib import features
+from pysc2.lib import actions
+
+# Useful aliases for actions
+_NO_OP = actions.FUNCTIONS.no_op.id
+_SELECT_ARMY = actions.FUNCTIONS.select_army.id
+_MOVE_SCREEN = actions.FUNCTIONS.Attack_screen.id
+
+action_dict = {0:_NO_OP, 1:_SELECT_ARMY, 2:_MOVE_SCREEN} # global variable
 
 # indexes of useful layers of the screen_features
 _PLAYER_RELATIVE = features.SCREEN_FEATURES.player_relative.index 
@@ -19,6 +27,10 @@ _PLAYER_NEUTRAL = 3
 _PLAYER_HOSTILE = 4
 
 debug=False
+
+def get_action_mask(available_actions):
+    action_mask = ~np.array([action_dict[i] in available_actions for i in action_dict.keys()])
+    return action_mask
 
 def get_coord_state(obs):
 
@@ -76,31 +88,47 @@ def init_game(game_params, max_steps=256, step_multiplier=8, **kwargs):
 
     return env
 
-def worker(worker_id, master_end, worker_end, game_params):
+def worker(worker_id, master_end, worker_end, game_params, max_steps):
     master_end.close()  # Forbid worker to use the master end for messaging
-    env = init_game(**game_params)
+    env = init_game(game_params, max_steps)
     np.random.seed(worker_id) # sets random seed for the environment
-
+    
     while True:
         cmd, data = worker_end.recv()
         if cmd == 'step':
-            ob_trg, reward, done, info = env.step(data)
-            # Check if termination happened for time limit truncation or natural end
-            if done and 'TimeLimit.truncated' in info:
+            obs = env.step(data)
+            state_trg = get_ohe_state(obs)
+            reward = obs[0].reward
+            done = obs[0].last()
+            available_actions = obs[0].observation.available_actions
+            action_mask = get_action_mask(available_actions)
+            
+            # Always bootstrap when episode finishes (in MoveToBeacon there is no real end)
+            if done:
                 bootstrap = True
             else:
                 bootstrap = False
+                
             # ob_trg is the state used as next state for the update
             # ob is the new state used to decide the next action 
             # (different if the episode ends and another one begins)
             if done:
-                ob = env.reset()
+                obs = env.reset()
+                state = get_ohe_state(obs)
             else:
-                ob = ob_trg
-            worker_end.send((ob, reward, done, info, bootstrap, ob_trg)) # check this; bootstrap = False always?
+                state = state_trg
+                
+            worker_end.send((state, reward, done, bootstrap, state_trg, action_mask))
+            
         elif cmd == 'reset':
-            ob = env.reset()
-            worker_end.send(ob)
+            obs = env.reset()
+            print("reset done")
+            state = get_ohe_state(obs)
+            available_actions = obs[0].observation.available_actions
+            action_mask = get_action_mask(available_actions)
+            
+            worker_end.send((state, action_mask))
+            print("info sent")
         elif cmd == 'close':
             worker_end.close()
             break
@@ -108,7 +136,7 @@ def worker(worker_id, master_end, worker_end, game_params):
             raise NotImplementedError
 
 class ParallelEnv:
-    def __init__(self, n_train_processes, game_params):
+    def __init__(self, n_train_processes, game_params, max_steps):
         self.nenvs = n_train_processes
         self.waiting = False
         self.closed = False
@@ -119,7 +147,7 @@ class ParallelEnv:
 
         for worker_id, (master_end, worker_end) in enumerate(zip(master_ends, worker_ends)):
             p = mp.Process(target=worker,
-                           args=(worker_id, master_end, worker_end, game_params))
+                           args=(worker_id, master_end, worker_end, game_params, max_steps))
             p.daemon = True
             p.start()
             self.workers.append(p)
@@ -136,13 +164,15 @@ class ParallelEnv:
     def step_wait(self):
         results = [master_end.recv() for master_end in self.master_ends]
         self.waiting = False
-        obs, rews, dones, infos, bootstraps, trg_obs = zip(*results)
-        return np.stack(obs), np.stack(rews), np.stack(dones), infos, np.stack(bootstraps), np.stack(trg_obs)
+        states, rews, dones, bootstraps, trg_states, action_mask = zip(*results)
+        return np.stack(states), np.stack(rews), np.stack(dones), np.stack(bootstraps), np.stack(trg_states), np.stack(action_mask)
 
     def reset(self):
         for master_end in self.master_ends:
             master_end.send(('reset', None))
-        return np.stack([master_end.recv() for master_end in self.master_ends])
+        results = [master_end.recv() for master_end in self.master_ends]
+        states, action_mask = zip(*results)
+        return np.stack(states), np.stack(action_mask)
 
     def step(self, actions):
         self.step_async(actions)
@@ -159,64 +189,17 @@ class ParallelEnv:
             worker.join()
             self.closed = True
 
-# Aggiungere il test
-
-def train_batched_A2C(agent, game_params, lr, n_train_processes, max_train_steps, unroll_length, test_interval=100):
-    envs = ParallelEnv(n_train_processes, game_params)
-
-    optimizer = optim.Adam(agent.parameters(), lr=lr)
-
-    step_idx = 0
-    s = envs.reset()
-    while step_idx < max_train_steps:
-        s_lst, a_lst, r_lst, done_lst, bootstrap_lst, s_trg_lst = list(), list(), list(), list(), list(), list()
-        log_probs = []
-        distributions = []
-        for _ in range(unroll_length):
-
-            a, log_prob, probs = agent.get_action(s)
-            a_lst.append(a)
-            log_probs.append(log_prob)
-            distributions.append(probs)
-
-            s_prime, r, done, info, bootstrap, s_trg = envs.step(a)
-            s_lst.append(s)
-            r_lst.append(r)
-            done_lst.append(done)
-            bootstrap_lst.append(bootstrap)
-            s_trg_lst.append(s_trg)
-
-            s = s_prime
-            step_idx += n_train_processes
-
-        ### Update time ###
-        critic_loss, actor_loss, entropy = agent.compute_ac_loss(r_lst, log_probs, distributions, 
-                                                                 s_lst, done_lst, bootstrap_lst, s_trg_lst)
-
-        loss = (critic_loss + actor_loss).mean()
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        ### 
-        
-        #if step_idx % PRINT_INTERVAL == 0:
-        #    test(step_idx, model)
-
-    envs.close()
-    return #cose
-
-def test(step_idx, agent, game_params):
-    env = test_env.Sandbox(**game_params)
+def test(step_idx, agent, test_env):
     score = 0.0
     done = False
     num_test = 10
     steps_to_solve = 0
     for _ in range(num_test):
-        s = env.random_reset()
+        s = test_env.reset()
         rewards = []
         while not done:
             a, log_prob, probs = agent.get_action(s)
-            s_prime, r, done, info = env.step(a[0])
+            s_prime, r, done, info = test_env.step(a[0])
             s = s_prime
             score += r
             rewards.append(r)
@@ -225,72 +208,3 @@ def test(step_idx, agent, game_params):
     print(f"Step # :{step_idx}, avg score : {score/num_test:.1f}, avg steps to solve : {steps_to_solve/num_test}")
     return score/num_test, steps_to_solve/num_test
 
-def train_batched_A2C(agent, game_params, lr, n_train_processes, max_train_steps, unroll_length, test_interval=100):
-    envs = ParallelEnv(n_train_processes, game_params)
-
-    optimizer = torch.optim.Adam(agent.parameters(), lr=lr)
-
-    score = []
-    steps_to_solve = []
-    critic_losses = [] 
-    actor_losses = []
-    entropies = []
-    
-    step_idx = 0
-    s = envs.reset()
-    while step_idx < max_train_steps:
-        s_lst, a_lst, r_lst, done_lst, bootstrap_lst, s_trg_lst = list(), list(), list(), list(), list(), list()
-        log_probs = []
-        distributions = []
-        for _ in range(unroll_length):
-
-            a, log_prob, probs = agent.get_action(s)
-            a_lst.append(a)
-            log_probs.append(log_prob)
-            distributions.append(probs)
-
-            s_prime, r, done, info, bootstrap, s_trg = envs.step(a)
-            s_lst.append(s)
-            r_lst.append(r)
-            done_lst.append(done)
-            bootstrap_lst.append(bootstrap)
-            s_trg_lst.append(s_trg)
-
-            s = s_prime
-            step_idx += 1 #n_train_processes
-
-        s_lst = np.array(s_lst).transpose(1,0,2,3,4)
-        r_lst = np.array(r_lst).transpose(1,0)
-        done_lst = np.array(done_lst).transpose(1,0)
-        bootstrap_lst = np.array(bootstrap_lst).transpose(1,0)
-        s_trg_lst = np.array(s_trg_lst).transpose(1,0,2,3,4)
-        
-        ### Update time ###
-        #print("len(r_lst): ", r_lst.shape)
-        #print("len(s_lst): ", s_lst.shape)
-        #print("len(done_lst): ", done_lst.shape)
-        #print("len(s_trg_lst): ", s_trg_lst.shape)
-        critic_loss, actor_loss, entropy = agent.compute_ac_loss(r_lst, log_probs, distributions, 
-                                                                 s_lst, done_lst, bootstrap_lst, s_trg_lst)
-
-        loss = (critic_loss + actor_loss).mean()
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        
-        #print("critic_loss: ", critic_loss)
-        #print("actor_loss: ", actor_loss)
-        #print("entropy: ", entropy)
-        critic_losses.append(critic_loss.item())
-        actor_losses.append(actor_loss.item())
-        entropies.append(entropy.item())
-        
-        ### Test time ###
-        if step_idx % test_interval == 0:
-            avg_score, avg_steps = test(step_idx, agent, game_params)
-            score.append(avg_score)
-            steps_to_solve.append(avg_steps)
-    envs.close()
-    
-    losses = dict(critic_losses=critic_losses, actor_losses=actor_losses, entropies=entropies)
-    return score, steps_to_solve, losses, agent

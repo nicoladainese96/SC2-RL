@@ -90,7 +90,7 @@ def play_episode(agent, env, max_steps, coord_state=True):
     done = []
     bootstrap = []
         
-    steps = 0
+    steps = 0 # not used
     while True:
      
         action, log_prob, probs = agent.step(obs, return_log = True) 
@@ -120,7 +120,7 @@ def play_episode(agent, env, max_steps, coord_state=True):
             break
             
         obs = new_obs
-        steps += 1
+        steps += 1 # not used
         
     rewards = np.array(rewards)
     states = np.array(states)
