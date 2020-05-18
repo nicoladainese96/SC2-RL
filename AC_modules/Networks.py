@@ -1,4 +1,4 @@
-from AC_modules.Networks import *
+from AC_modules.Layers import *
 
 import numpy as np
 import torch 
@@ -6,7 +6,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Categorical
 
-    
+debug = True
+
 class SpatialFeatures(nn.Module):
     def __init__(self, n_layers, linear_size, in_channels, n_channels, **HPs):
         super(SpatialFeatures, self).__init__()
@@ -77,9 +78,9 @@ class CategoricalNet(nn.Module):
         logits = self.net(state_rep)
         log_probs = F.log_softmax(logits, dim=(-1))
         probs = torch.exp(log_probs)
-        distribution = Categorical(probs)
-        arg = distribution.sample().item() 
-        return [arg], log_probs.view(-1)[arg], probs
+        arg = Categorical(probs).sample()
+        arg = arg.detach().cpu().numpy()
+        return arg.reshape(-1,1), log_probs[range(len(arg)), arg], probs
     
 class SpatialNet(nn.Module):
     
@@ -124,7 +125,7 @@ class SpatialNet(nn.Module):
         log_probs = F.log_softmax(x, dim=(-1))
         if debug: 
             print("log_probs.shape: ", log_probs.shape)
-            print("log_probs.shape (reshaped): ", log_probs.view(self.size, self.size).shape)
+            print("log_probs.shape (reshaped): ", log_probs.view(-1, self.size, self.size).shape)
         probs = torch.exp(log_probs)
         
         # assume squared space
@@ -133,8 +134,8 @@ class SpatialNet(nn.Module):
         args = torch.cat([xx.view(self.size,self.size,1), xx.T.view(self.size,self.size,1)], axis=2)
         args = args.reshape(-1,2)
         
-        distribution = Categorical(probs)
-        index = distribution.sample().item() # detaching it, is it okay? maybe...
+        index = Categorical(probs).sample()
+        print("index.shape: ", index.shape)
         arg = args[index] # and this are the sampled coordinates
         arg = list(arg.detach().numpy())
         

@@ -32,7 +32,7 @@ _SELECT_ARMY = actions.FUNCTIONS.select_army.id
 _SELECT_ALL = [0]
 _NOT_QUEUED = [0]
 
-debug = False
+debug = True
 
 class MoveToBeaconSpatialA2C():
     """
@@ -84,14 +84,15 @@ class MoveToBeaconSpatialA2C():
             print("\n\n"+"="*10 +" A2C Architecture "+"="*10)
             print("Architecture: \n", self.AC)
 
-    def step(self, obs):
+    def step(self, state, action_mask):
         
-        state = self.get_ohe_state(obs)
-        state = torch.from_numpy(state).float().to(self.device).unsqueeze(0)
-        available_actions = obs[0].observation.available_actions
-        if debug: print("\navailable actions: ", available_actions)
+        #state = self.get_ohe_state(obs)
+        state = torch.from_numpy(state).float().to(self.device)
+        #available_actions = obs[0].observation.available_actions
+        action_mask = torch.tensor(action_mask).to(self.device)
+        if debug: print("\naction mask: ", action_mask)
             
-        log_probs, spatial_features, nonspatial_features = self.AC.pi(state, available_actions)
+        log_probs, spatial_features, nonspatial_features = self.AC.pi(state, action_mask)
         if debug: 
             print("log_probs: ", log_probs)
             print("spatial_features.shape: ", spatial_features.shape)
@@ -105,15 +106,16 @@ class MoveToBeaconSpatialA2C():
         probs = torch.exp(log_probs)
         if debug: print("probs: ", probs)
             
-        distribution = Categorical(probs)
-        a = distribution.sample().item()
-        log_prob = log_probs.view(-1)[a]
+        a = Categorical(probs).sample()
+        a = a.detach().cpu().numpy()
+        log_prob = log_probs[range(len(a)), a]
         if debug: print("log_prob: ", log_prob)
         
-        action_id = self.AC.action_dict[a]
+        
+        action_id = np.array([self.AC.action_dict[act] for act in a])
         if debug: print("action_id: ", action_id)
-            
-        args, args_log_prob = self.get_arguments(spatial_features, nonspatial_features, action_id)
+        ### Works untill here    
+        args, args_log_prob = self.get_arguments(spatial_features, nonspatial_features, a)
         if debug: print("args: ", args)
         
         if args_log_prob is not None:
@@ -128,23 +130,40 @@ class MoveToBeaconSpatialA2C():
         return action, log_prob, probs
 
     
-    @staticmethod
-    def get_ohe_state(obs):
+    #@staticmethod
+    #def get_ohe_state(obs):
     
-        player_relative = obs[0].observation['feature_screen'][_PLAYER_RELATIVE]
-        selected = obs[0].observation['feature_screen'][_SELECTED].astype(float)
+    #    player_relative = obs[0].observation['feature_screen'][_PLAYER_RELATIVE]
+    #    selected = obs[0].observation['feature_screen'][_SELECTED].astype(float)
 
-        friendly = (player_relative == _PLAYER_FRIENDLY).astype(float)
-        neutral = (player_relative == _PLAYER_NEUTRAL).astype(float)
+    #    friendly = (player_relative == _PLAYER_FRIENDLY).astype(float)
+    #    neutral = (player_relative == _PLAYER_NEUTRAL).astype(float)
 
-        state = np.zeros((3,)+player_relative.shape).astype(float)
-        state[0] = friendly
-        state[1] = neutral
-        state[2] = selected
+    #    state = np.zeros((3,)+player_relative.shape).astype(float)
+    #    state[0] = friendly
+    #    state[1] = neutral
+    #    state[2] = selected
 
-        return state
-    
-    def get_arguments(self, spatial_features, nonspatial_features, action_id):
+    #    return state
+    def get_arguments(self, spatial_features, nonspatial_features, action):
+        
+        results = {}    
+        for arg_name in self.AC.arguments_dict.keys():
+            if self.AC.arguments_type[arg_name] == 'categorical':
+                arg_sampled, log_prob, _ = self.AC.sample_param(nonspatial_features, arg_name)
+            elif self.AC.arguments_type[arg_name] == 'spatial':
+                arg_sampled, log_prob, _ = self.AC.sample_param(spatial_features, arg_name)
+            else:
+                raise Exception("argument type for "+arg_name+" not understood")
+                
+            results[arg_name] = (arg_sampled, log_prob)
+           
+        for i, a in action:
+            arg_names = self.act_to_arg_names[a]
+            values = list( map(results.get, arg_names) )
+            print("values: ", values)
+            
+    def get_arguments_v0(self, spatial_features, nonspatial_features, action_id):
         action = self.AC.all_actions[action_id]
         list_of_args = action.args
         

@@ -11,7 +11,7 @@ _NO_OP = actions.FUNCTIONS.no_op.id
 _SELECT_ARMY = actions.FUNCTIONS.select_army.id
 _MOVE_SCREEN = actions.FUNCTIONS.Attack_screen.id
 
-debug = False
+debug = True
 
 ### Shared ActorCritic architecture
 
@@ -78,11 +78,13 @@ class SpatialActorCritic(nn.Module):
     def _init_params_nets(self):
         self.arguments_networks = {}
         self.arguments_dict = {}
-
+        self.arguments_type = {}
+        self.act_to_arg_names = {}
+        
         for a in self.action_dict:
             action = self.all_actions[self.action_dict[a]]
             args = action.args
-
+            self.act_to_arg_names[a] = [arg.name for arg in args]
             for arg in args:
                 self.arguments_dict[arg.name] = arg.id # store 'name':id pairs for future use
                 if debug: print('\narg.name: ', arg.name)
@@ -92,23 +94,30 @@ class SpatialActorCritic(nn.Module):
                 if len(size) == 1:
                     if debug: print("Init CategoricalNet for "+arg.name+' argument')
                     self.arguments_networks[arg.name] = CategoricalNet(self.n_channels, size[0]) 
+                    self.arguments_type[arg.name] = 'categorical'
                 else:
                     if debug: print("Init SpatialNet for "+arg.name+' argument')
                     self.arguments_networks[arg.name] = SpatialParameters(self.n_channels, size[0]) 
+                    self.arguments_type[arg.name] = 'spatial'
+        
         return
     
-    def pi(self, state, available_actions):
+    def pi(self, state, mask):
         
         spatial_features = self.spatial_features_net(state)
         nonspatial_features = self.nonspatial_features_net(spatial_features)
         
         logits = self.actor(nonspatial_features)
-        if debug: print("logits: ", logits)
+        if debug: 
+            print("logits shape: ", logits.shape)
+            print("logits: ", logits)
             
-        mask = self.get_action_mask(available_actions)
-        if debug: print("mask: ", mask)
+        #mask = self.get_action_mask(available_actions)
+        if debug: 
+            print("mask shape: ", mask.shape)
+            print("mask: ", mask)
             
-        logits[:,mask] = torch.tensor(np.NINF)
+        logits[mask] = torch.tensor(np.NINF)
         if debug: print("logits (after mask): ", logits)
             
         log_probs = F.log_softmax(logits, dim=-1)
@@ -127,9 +136,9 @@ class SpatialActorCritic(nn.Module):
         """
         return self.arguments_networks[arg_name](state_rep)
         
-    def get_action_mask(self, available_actions):
-        action_mask = ~np.array([self.action_dict[i] in available_actions for i in self.action_dict.keys()])
-        return action_mask
+    #def get_action_mask(self, available_actions):
+    #    action_mask = ~np.array([self.action_dict[i] in available_actions for i in self.action_dict.keys()])
+    #    return action_mask
     
     def to(self, device):
         """Wrapper of .to method to load the model on GPU/CPU"""
@@ -139,5 +148,16 @@ class SpatialActorCritic(nn.Module):
         self.critic.to(device)
         # this part here is not loaded automatically
         for key in self.arguments_networks:
-            self.arguments_networks[key].to(device)
+            self.arguments_networks[key].to(device) 
+            
+    def parameters(self):
+        # need to pass them by hand, because the argument networks' parameters are not read automatically
+        params = [self.actor.parameters()]+\
+                 [self.spatial_features_net.parameters()]+\
+                 [self.nonspatial_features_net.parameters()]+\
+                 [self.actor.parameters()]+\
+                 [self.critic.parameters()]+\
+                 [self.arguments_networks[key].parameters() for key in self.arguments_networks]
+        return it.chain(*params)
+   
     
