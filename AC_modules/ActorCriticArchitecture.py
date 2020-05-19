@@ -11,7 +11,7 @@ _NO_OP = actions.FUNCTIONS.no_op.id
 _SELECT_ARMY = actions.FUNCTIONS.select_army.id
 _MOVE_SCREEN = actions.FUNCTIONS.Attack_screen.id
 
-debug = True
+debug = False
 
 ### Shared ActorCritic architecture
 
@@ -117,10 +117,15 @@ class SpatialActorCritic(nn.Module):
             print("mask shape: ", mask.shape)
             print("mask: ", mask)
             
-        logits[mask] = torch.tensor(np.NINF)
-        if debug: print("logits (after mask): ", logits)
+        #if logits.is_cuda:
+        #    logits[mask] = torch.tensor(np.NINF, requires_grad = True).cuda()
+        #else:
+        #    logits[mask] = torch.tensor(np.NINF, requires_grad = True)
+                
+        #if debug: print("logits (after mask): ", logits)
             
-        log_probs = F.log_softmax(logits, dim=-1)
+        log_probs = F.log_softmax(logits.masked_fill((mask).bool(), float('-inf')), dim=-1) 
+        
         return log_probs, spatial_features, nonspatial_features
     
     def V_critic(self, state):
