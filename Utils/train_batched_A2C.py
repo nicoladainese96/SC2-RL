@@ -96,7 +96,7 @@ def worker(worker_id, master_end, worker_end, game_params, max_steps):
     while True:
         cmd, data = worker_end.recv()
         if cmd == 'step':
-            obs = env.step(data)
+            obs = env.step([data])
             state_trg = get_ohe_state(obs)
             reward = obs[0].reward
             done = obs[0].last()
@@ -122,13 +122,11 @@ def worker(worker_id, master_end, worker_end, game_params, max_steps):
             
         elif cmd == 'reset':
             obs = env.reset()
-            print("reset done")
             state = get_ohe_state(obs)
             available_actions = obs[0].observation.available_actions
             action_mask = get_action_mask(available_actions)
             
             worker_end.send((state, action_mask))
-            print("info sent")
         elif cmd == 'close':
             worker_end.close()
             break
@@ -188,23 +186,3 @@ class ParallelEnv:
         for worker in self.workers:
             worker.join()
             self.closed = True
-
-def test(step_idx, agent, test_env):
-    score = 0.0
-    done = False
-    num_test = 10
-    steps_to_solve = 0
-    for _ in range(num_test):
-        s = test_env.reset()
-        rewards = []
-        while not done:
-            a, log_prob, probs = agent.get_action(s)
-            s_prime, r, done, info = test_env.step(a[0])
-            s = s_prime
-            score += r
-            rewards.append(r)
-        done = False
-        steps_to_solve += len(rewards)
-    print(f"Step # :{step_idx}, avg score : {score/num_test:.1f}, avg steps to solve : {steps_to_solve/num_test}")
-    return score/num_test, steps_to_solve/num_test
-

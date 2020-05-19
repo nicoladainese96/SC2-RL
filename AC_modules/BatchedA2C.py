@@ -32,7 +32,7 @@ _SELECT_ARMY = actions.FUNCTIONS.select_army.id
 _SELECT_ALL = [0]
 _NOT_QUEUED = [0]
 
-debug = True
+debug = False
 
 class MoveToBeaconSpatialA2C():
     """
@@ -96,10 +96,10 @@ class MoveToBeaconSpatialA2C():
         if debug: 
             print("log_probs: ", log_probs)
             print("spatial_features.shape: ", spatial_features.shape)
-            print("spatial_features: ", spatial_features)
+            #print("spatial_features: ", spatial_features)
             print("spatial_features (cuda): ", spatial_features.is_cuda)
             print("nonspatial_features.shape: ", nonspatial_features.shape)
-            print("nonspatial_features: ", nonspatial_features)
+            #print("nonspatial_features: ", nonspatial_features)
             print("nonspatial_features (cuda): ", nonspatial_features.is_cuda)
             
             
@@ -113,38 +113,28 @@ class MoveToBeaconSpatialA2C():
         
         
         action_id = np.array([self.AC.action_dict[act] for act in a])
-        if debug: print("action_id: ", action_id)
+        if debug: 
+            print("action_id: ", action_id)
+            print("a: ", a)
         ### Works untill here    
         args, args_log_prob = self.get_arguments(spatial_features, nonspatial_features, a)
-        if debug: print("args: ", args)
-        
-        if args_log_prob is not None:
-            log_prob = log_prob + args_log_prob
-            if debug: 
-                print("args_log_prob: ", args_log_prob)
-                print("log_prob (after sum): ", log_prob)
+        if debug: 
+            print("\nargs: ", args)
+            print("args_log_prob.shape; ", args_log_prob.shape)
+            print("args_log_prob: ", args_log_prob)
+            print("log_prob.shape: ", log_prob.shape)
+            print("log_prob: ", log_prob)
+
+        log_prob = log_prob + args_log_prob
+        if debug: 
+            print("args_log_prob: ", args_log_prob)
+            print("log_prob (after sum): ", log_prob)
                 
-        action = actions.FunctionCall(action_id, args)
+        action = [actions.FunctionCall(action_id[i], args[i]) for i in range(len(action_id))]
         if debug: print("action: ", action)
             
         return action, log_prob, probs
 
-    
-    #@staticmethod
-    #def get_ohe_state(obs):
-    
-    #    player_relative = obs[0].observation['feature_screen'][_PLAYER_RELATIVE]
-    #    selected = obs[0].observation['feature_screen'][_SELECTED].astype(float)
-
-    #    friendly = (player_relative == _PLAYER_FRIENDLY).astype(float)
-    #    neutral = (player_relative == _PLAYER_NEUTRAL).astype(float)
-
-    #    state = np.zeros((3,)+player_relative.shape).astype(float)
-    #    state[0] = friendly
-    #    state[1] = neutral
-    #    state[2] = selected
-
-    #    return state
     def get_arguments(self, spatial_features, nonspatial_features, action):
         
         results = {}    
@@ -156,35 +146,41 @@ class MoveToBeaconSpatialA2C():
             else:
                 raise Exception("argument type for "+arg_name+" not understood")
                 
+            if debug:
+                print("\narg_name : "+arg_name)
+                print("arg_sampled: ", arg_sampled)
+                print("log_prob: ", log_prob)
             results[arg_name] = (arg_sampled, log_prob)
            
-        for i, a in action:
-            arg_names = self.act_to_arg_names[a]
+        args, args_log_prob = [], []
+        for i, a in enumerate(action):
+            arg = []
+            arg_log_prob = torch.tensor([0]).float().to(self.device)
+            arg_names = self.AC.act_to_arg_names[a]
+            if debug: print("\narg_names: ", arg_names)
             values = list( map(results.get, arg_names) )
-            print("values: ", values)
-            
-    def get_arguments_v0(self, spatial_features, nonspatial_features, action_id):
-        action = self.AC.all_actions[action_id]
-        list_of_args = action.args
-        
-        args = []
-        if len(list_of_args) != 0:
-            log_probs = []
-            for arg in list_of_args:
-                size = self.AC.all_arguments[arg.id].sizes
-                if len(size) == 1:
-                    arg_sampled, log_prob, _ = self.AC.sample_param(nonspatial_features, arg.name)
-                else:
-                    arg_sampled, log_prob, _ = self.AC.sample_param(spatial_features, arg.name)
-                args.append(arg_sampled)
-                log_probs.append(log_prob)
-            log_prob = torch.stack(log_probs).sum()
-            
-        else:
-            log_prob = None
-            
-        return args, log_prob
-        
+            if debug: 
+                print("values: ", values)
+                print("len(values): ", len(values))
+                print("len(arg_names): ", len(arg_names))
+            if len(values) != 0:
+                if debug: 
+                    print("len(values[0]): ", len(values[0]))
+                    print("values[0]: ", values[0])
+                for j in range(len(values)):
+                    if debug:
+                        print('values[%d][0,i]'%j, values[j][0][i])
+                        print('values[%d][1,i]'%j, values[j][1][i])
+                    arg.append(list(values[j][0][i]))
+                    arg_log_prob = arg_log_prob + values[j][1][i] # sum log_probs
+            if debug:
+                print("arg: ", arg)
+                print('arg_log_prob: ', arg_log_prob)
+            args.append(arg)
+            args_log_prob.append(arg_log_prob) 
+        args_log_prob = torch.stack(args_log_prob, axis=0).squeeze()
+        return args, args_log_prob
+ 
     def compute_ac_loss(self, rewards, log_probs, distributions, states, done, bootstrap, trg_states): 
         ### Compute n-steps rewards, states, discount factors and done mask ###
         

@@ -127,34 +127,3 @@ class ResidualConvolutional(nn.Module):
         out = out + x
         return out 
     
-### sample spatial parameters from a matrix-like state representation
-
-class SpatialParameters(nn.Module):
-    
-    def __init__(self, n_channels, linear_size):
-        super(SpatialParameters, self).__init__()
-        
-        self.size = linear_size
-        self.conv = nn.Conv2d(n_channels, 1, kernel_size=3, stride=1, padding=1)
-    
-    def forward(self, x):
-        x = self.conv(x)
-        x = x.reshape((x.shape[0],-1))
-        log_probs = F.log_softmax(x, dim=(-1))
-        if debug: 
-            print("log_probs.shape: ", log_probs.shape)
-            print("log_probs.shape (reshaped): ", log_probs.view(self.size, self.size).shape)
-        probs = torch.exp(log_probs)
-        
-        # assume squared space
-        x_lin = torch.arange(self.size)
-        xx = x_lin.repeat(self.size,1)
-        args = torch.cat([xx.view(self.size,self.size,1), xx.T.view(self.size,self.size,1)], axis=2)
-        args = args.reshape(-1,2)
-        
-        distribution = Categorical(probs)
-        index = distribution.sample().item() # detaching it, is it okay? maybe...
-        arg = args[index] # and this are the sampled coordinates
-        arg = list(arg.detach().numpy())
-        
-        return arg, log_probs.view(self.size, self.size)[arg[0], arg[1]], probs   
