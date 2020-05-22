@@ -39,9 +39,17 @@ class PositionalEncoding(nn.Module):
     between −1 and 1. Then projects the feature dimension to n_features through a 
     linear layer.
     """
-    def __init__(self, n_kernels, n_features):
+    def __init__(self, n_kernels, n_features, device = None):
         super(PositionalEncoding, self).__init__()
         self.projection = nn.Linear(n_kernels + 2, n_features)
+
+        if device is None:
+            if torch.cuda.is_available():
+                self.device = torch.device("cuda")
+            else:
+                self.device = torch.device("cpu")
+        else:
+            self.device = device
 
     def forward(self, x):
         """
@@ -61,8 +69,7 @@ class PositionalEncoding(nn.Module):
             print("x.shape (PositionalEncoding): ", x.shape)
         return x
     
-    @staticmethod
-    def add_encoding2D(x):
+    def add_encoding2D(self, x):
         x_ax = x.shape[-2]
         y_ax = x.shape[-1]
         
@@ -71,13 +78,8 @@ class PositionalEncoding(nn.Module):
         
         y_lin = torch.linspace(-1,1,y_ax).view(-1,1)
         yy = y_lin.repeat(x.shape[0],1,x_ax).view(-1, 1, y_ax, x_ax).transpose(3,2)
-        
-        if torch.cuda.is_available():
-            device = torch.device("cuda")
-        else:
-            device = torch.device("cpu")
     
-        x = torch.cat((x,xx.to(device),yy.to(device)), axis=1)
+        x = torch.cat((x,xx.to(self.device),yy.to(self.device)), axis=1)
         return x
     
 class FeaturewiseMaxPool(nn.Module):
@@ -103,9 +105,8 @@ class ResidualLayer(nn.Module):
         self.w2 = nn.Linear(n_hidden, n_features)
 
     def forward(self, x):
-        out = F.relu(self.w1(self.norm(x)))
-        out = self.w2(out)
-        return out + x
+        x = self.w2(F.relu(self.w1(self.norm(x)))) + x
+        return x
 
 class ResidualConvolutional(nn.Module):
     
@@ -123,7 +124,122 @@ class ResidualConvolutional(nn.Module):
                                 )
         
     def forward(self, x):
-        out = self.net(x)
-        out = out + x
-        return out 
+        x = self.net(x) + x
+        return x 
     
+### GatedTransformer for the attention/relational block ###
+class PositionwiseFeedForward(nn.Module):
+    """
+    Applies 2 linear layers with ReLU and dropout layers
+    only after the first layer.
+    """
+    def __init__(self, d_model, d_ff, dropout=0.1):
+        super(PositionwiseFeedForward, self).__init__()
+        self.w_1 = nn.Linear(d_model, d_ff)
+        self.w_2 = nn.Linear(d_ff, d_model)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        return self.w_2(self.dropout(F.relu(self.w_1(x))))
+    
+class GRU_gating(nn.Module):
+    def __init__(self, n_features):
+        super(GRU_gating, self).__init__()
+        self.Wr = nn.Linear(n_features*2, n_features, bias=False)
+        self.Wz = nn.Linear(n_features*2, n_features, bias=True)
+        self.Wg = nn.Linear(n_features*2, n_features, bias=False)
+        
+    def forward(self, x, y):
+        xy = torch.cat([x, y], axis=-1)
+        if debug: print("xy.shape: ", xy.shape)
+            
+        #r = torch.sigmoid(self.Wr(xy))
+        #if debug: print("r.shape: ", r.shape)
+            
+        z = torch.sigmoid(self.Wz(xy))
+        if debug: print("z.shape: ", z.shape)
+            
+        #rx = torch.sigmoid(self.Wr(xy))*x
+        #if debug: print("rx.shape: ", rx.shape)
+            
+        #h = torch.tanh(self.Wg(torch.cat([rx, y], axis=-1)))
+        #if debug: print("h.shape: ", h.shape)
+
+        return (1-z)*x + z*torch.tanh(self.Wg(torch.cat([torch.sigmoid(self.Wr(xy))*x, y], axis=-1)))    
+
+class GatedTransformerBlock(nn.Module):
+    def __init__(self, n_features, n_heads, n_hidden=64, dropout=0.1):
+        """
+        Args:
+          n_features: Number of input and output features. (d_model)
+          n_heads: Number of attention heads in the Multi-Head Attention.
+          n_hidden: Number of hidden units in the Feedforward (MLP) block. (d_k)
+          dropout: Dropout rate after the first layer of the MLP and the two skip connections.
+        """
+        super(GatedTransformerBlock, self).__init__()
+        self.norm = nn.LayerNorm(n_features)
+        self.dropout = nn.Dropout(dropout)
+        self.attn = nn.MultiheadAttention(n_features, n_heads, dropout)
+        self.GRU_gate1 = GRU_gating(n_features)
+        self.ff = PositionwiseFeedForward(n_features, n_hidden, dropout)
+        self.GRU_gate2 = GRU_gating(n_features)
+        
+    def forward(self, x, mask=None):
+        """
+        Args:
+          x of shape (n_pixels**2, batch_size, n_features): Input sequences.
+          mask of shape (batch_size, max_seq_length): Boolean tensor indicating which elements of the input
+              sequences should be ignored.
+        
+        Returns:
+          z of shape (max_seq_length, batch_size, n_features): Encoded input sequence.
+
+        Note: All intermediate signals should be of shape (n_pixels**2, batch_size, n_features).
+        """
+        
+        # First submodule
+        x = self.norm(x) # LayerNorm to the input before entering submodule
+        attn_output, attn_output_weights = self.attn(x, x, x, key_padding_mask=mask) # MHA step
+        x = self.dropout(self.GRU_gate1(x, attn_output)) # skip connection added
+        
+        # Second submodule
+        x = self.norm(x) # LayerNorm to the input before entering submodule
+        #z = self.ff(x) # FF step
+        return self.dropout(self.GRU_gate2(x, self.ff(x))) # skip connection added
+
+class GatedRelationalModule(nn.Module):
+    """Implements the relational module from paper Relational Deep Reinforcement Learning"""
+    def __init__(self, n_kernels=24, n_features=256, n_heads=4, n_attn_modules=2, n_hidden=64, dropout=0, device=None):
+        """
+        Parameters
+        ----------
+        n_kernels: int (default 24)
+            Number of features extracted for each pixel
+        n_features: int (default 256)
+            Number of linearly projected features after positional encoding.
+            This is the number of features used during the Multi-Headed Attention
+            (MHA) blocks
+        n_heads: int (default 4)
+            Number of heades in each MHA block
+        n_attn_modules: int (default 2)
+            Number of MHA blocks
+        """
+        super(GatedRelationalModule, self).__init__()
+        
+        enc_layer = GatedTransformerBlock(n_features, n_heads, n_hidden=n_hidden, dropout=dropout)
+        
+        #encoder_layers = clones(enc_layer, n_attn_modules)
+        encoder_layers = nn.ModuleList([enc_layer for _ in range(n_attn_modules)])
+        self.net = nn.Sequential(
+            PositionalEncoding(n_kernels, n_features, device),
+            *encoder_layers)
+        
+        #if debug:
+        #    print(self.net)
+        
+    def forward(self, x):
+        """Expects an input of shape (batch_size, n_pixels, n_kernels)"""
+        x = self.net(x)
+        if debug:
+            print("x.shape (RelationalModule): ", x.shape)
+        return x

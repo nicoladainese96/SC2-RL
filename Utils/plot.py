@@ -128,19 +128,19 @@ def plot_session(score, losses, moving_average=False, average_window=100):
     
 def plot_bA2C_session(score, losses, unroll_length, test_interval, moving_average=False, average_window=100):
     
-    #if moving_average:
-    #    n_epochs = np.arange(100, len(score))
-    #else:
-    #    n_epochs = np.arange(len(score))
+    if moving_average:
+        n_epochs = np.arange(100, len(score))*unroll_length*test_interval
+    else:
+        n_epochs = np.arange(len(score))*unroll_length*test_interval
         
     ### plot score ###
     plt.figure(figsize=(8,6))
 
-    #if moving_average:
-    #    average_score = np.array([np.mean(score[i:i+100]) for i in range(len(score)-100)])
-    #    plt.plot(n_epochs, average_score)
-    #else:
-    plt.plot(np.arange(len(score))*unroll_length*test_interval, score)
+    if moving_average:
+        average_score = np.array([np.mean(score[i:i+100]) for i in range(len(score)-100)])
+        plt.plot(n_epochs, average_score)
+    else:
+        plt.plot(n_epochs, score)
     plt.xlabel("Number of steps", fontsize=16)
     plt.ylabel("Reward", fontsize=16)
     plt.show()

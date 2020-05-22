@@ -90,8 +90,9 @@ def init_game(game_params, max_steps=256, step_multiplier=8, **kwargs):
 
 def worker(worker_id, master_end, worker_end, game_params, max_steps):
     master_end.close()  # Forbid worker to use the master end for messaging
-    env = init_game(game_params, max_steps)
-    np.random.seed(worker_id) # sets random seed for the environment
+    np.random.seed() # sets random seed for the environment
+    env = init_game(game_params, max_steps, random_seed=np.random.randint(10000))
+    
     
     while True:
         cmd, data = worker_end.recv()

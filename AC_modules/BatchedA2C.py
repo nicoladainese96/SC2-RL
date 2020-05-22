@@ -44,8 +44,8 @@ class MoveToBeaconSpatialA2C():
       
     """ 
     
-    def __init__(self, action_space, n_layers, linear_size, in_channels, n_channels,
-                 env, gamma, H=1e-3, n_steps = 20, device='cpu', **net_args):
+    def __init__(self, action_space, env, spatial_model, nonspatial_model, spatial_dict, 
+                 nonspatial_dict, n_features, n_channels, gamma, H=1e-3, n_steps = 20, device='cpu'):
         """
         Parameters
         ----------
@@ -70,7 +70,8 @@ class MoveToBeaconSpatialA2C():
         self.n_steps = n_steps
         self.H = H
         
-        self.AC = SpatialActorCritic(action_space, env, n_layers, linear_size, in_channels, n_channels, **net_args)
+        self.AC = SpatialActorCritic(action_space, env, spatial_model, nonspatial_model, spatial_dict, 
+                                     nonspatial_dict, n_features, n_channels)
      
         self.device = device 
         self.AC.to(self.device) 

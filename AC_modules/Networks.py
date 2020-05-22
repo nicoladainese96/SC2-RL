@@ -8,13 +8,14 @@ from torch.distributions import Categorical
 
 debug = False
 
+### Spatial networks: preserve screen resolution ###
 class SpatialFeatures(nn.Module):
     def __init__(self, n_layers, linear_size, in_channels, n_channels, **HPs):
         super(SpatialFeatures, self).__init__()
         
         self.linear_size = linear_size # screen resolution
         
-        layers =  nn.ModuleList([ResidualConvolutional(linear_size, n_channels, **HPs) for _ in range(n_layers-1)])
+        layers =  nn.ModuleList([ResidualConvolutional(linear_size, n_channels, **HPs) for _ in range(n_layers)])
         
         self.net = nn.Sequential(
                                 nn.Conv2d(in_channels, n_channels, kernel_size=3, stride=1, padding=1),
@@ -25,7 +26,92 @@ class SpatialFeatures(nn.Module):
     def forward(self, x):
         x = self.net(x)
         return x
+
+class FullyConvSpatial(nn.Module):
+    def __init__(self, in_channels, n_channels=32):
+        super(FullyConvSpatial, self).__init__()
+        self.net = nn.Sequential(
+                                nn.Conv2d(in_channels, 16, kernel_size=5, stride=1, padding=2),
+                                nn.ReLU(),
+                                nn.Conv2d(16, n_channels, kernel_size=3, stride=1, padding=1),
+                                nn.ReLU()
+                                )
+        
+    def forward(self, x):
+        return self.net(x)
     
+class FullyConvNonSpatial(nn.Module):
+    def __init__(self, n_features=256, n_channels=32, linear_size=16):
+        super(FullyConvNonSpatial, self).__init__()
+        self.net = nn.Sequential(
+                                 nn.Linear((linear_size**2)*n_channels, n_features),
+                                 nn.ReLU()
+                                )
+    def forward(self, x):
+        B = x.shape[0]
+        x = x.reshape(B,-1) # flatten n_channels*linear_size**2
+        x = self.net(x)
+        return x
+        
+
+class FullyConvSpatial_v1(nn.Module):
+    def __init__(self, in_channels, n_channels=32, linear_size=16):
+        super(FullyConvSpatial, self).__init__()
+        self.net = nn.Sequential(
+                                nn.Conv2d(in_channels, 16, kernel_size=5, stride=1, padding=2),
+                                nn.ReLU(),
+                                nn.Conv2d(16, n_channels, kernel_size=3, stride=1, padding=1),
+                                nn.ReLU(),
+                                ResidualConvolutional(linear_size, n_channels),
+                                nn.ReLU()
+                                )
+        
+    def forward(self, x):
+        return self.net(x)
+    
+class FullyConvNonSpatial_v1(nn.Module):
+    def __init__(self, n_features=256, n_channels=32, linear_size=16):
+        super(FullyConvNonSpatial, self).__init__()
+        self.net = nn.Sequential(
+                                 nn.Linear((linear_size**2)*n_channels, n_features),
+                                 nn.ReLU(),
+                                 ResidualLayer(n_features, 64),
+                                 nn.ReLU()
+                                )
+    def forward(self, x):
+        B = x.shape[0]
+        x = x.reshape(B,-1) # flatten n_channels*linear_size**2
+        x = self.net(x)
+        return x
+    
+### NonSpatial networks: start from (batch, n_channels, size, size) and return (batch, n_features) ###
+# Usually n_channels = n_features, but can be adapted
+
+class GatedRelationalNet(nn.Module):
+    def __init__(self, n_kernels=24, n_features=32, n_heads=2, n_attn_modules=4, 
+                 feature_hidden_dim=64, feature_n_residuals=4, device=None):
+
+        super(GatedRelationalNet, self).__init__()
+        
+        self.n_features = n_features
+
+        MLP = nn.ModuleList([ResidualLayer(n_features, feature_hidden_dim) for _ in range(feature_n_residuals)])
+        
+        self.net = nn.Sequential(
+            GatedRelationalModule(n_kernels, n_features, n_heads, n_attn_modules, device=device),
+            FeaturewiseMaxPool(pixel_axis = 0),
+            *MLP)
+   
+        if debug:
+            print(self.net)
+        
+    def forward(self, x):
+        x = self.net(x)
+        if debug:
+            print("x.shape (BoxWorldNet): ", x.shape)
+        return x
+    
+# change name of the class and use more of that
 class NonSpatialFeatures(nn.Module):
     
     def __init__(self, linear_size, n_channels, pixel_hidden_dim=128, pixel_n_residuals=4, 
@@ -60,7 +146,7 @@ class NonSpatialFeatures(nn.Module):
     
 class CategoricalNet(nn.Module):
     
-    def __init__(self, n_features, size, hiddens=[32,16]):
+    def __init__(self, n_features, size, hiddens=[256]):
         super(CategoricalNet, self).__init__()
         layers = []
         
@@ -90,7 +176,7 @@ class SpatialParameters(nn.Module):
         super(SpatialParameters, self).__init__()
         
         self.size = linear_size
-        self.conv = nn.Conv2d(n_channels, 1, kernel_size=3, stride=1, padding=1)
+        self.conv = nn.Conv2d(n_channels, 1, kernel_size=1, stride=1, padding=0)
     
     def forward(self, x):
         B = x.shape[0]
