@@ -22,7 +22,8 @@ class SharedActor(nn.Module):
                         nn.Linear(n_features, 256),
                         nn.ReLU(),
                         nn.Linear(256, action_space))
-
+        #self.linear = nn.Linear(n_features, action_space)
+        
     def forward(self, shared_repr):
         log_probs = F.log_softmax(self.linear(shared_repr), dim=1)
         return log_probs
@@ -34,7 +35,8 @@ class SharedCritic(nn.Module):
                         nn.Linear(n_features, 256),
                         nn.ReLU(),
                         nn.Linear(256, 1))
-
+        #self.net = nn.Linear(n_features, 1)
+        
     def forward(self, shared_repr):
         V = self.net(shared_repr)
         return V
@@ -43,7 +45,8 @@ class SpatialActorCritic(nn.Module):
     """
     
     """
-    def __init__(self, action_space, env, n_layers, linear_size, in_channels, n_channels, **non_spatial_HPs):
+    def __init__(self, action_space, env, spatial_model, nonspatial_model, spatial_dict, nonspatial_dict, 
+                 n_features, n_channels):
         """
         Parameters
         ----------
@@ -66,13 +69,14 @@ class SpatialActorCritic(nn.Module):
         self.all_arguments = env.action_spec()[0][0]
         
         # Useful HyperParameters as attributes
+        self.n_features = n_features
         self.n_channels = n_channels
         
         # Networks
-        self.spatial_features_net = SpatialFeatures(n_layers, linear_size, in_channels, n_channels)
-        self.nonspatial_features_net = NonSpatialFeatures(linear_size, n_channels, **non_spatial_HPs)
-        self.actor = SharedActor(action_space, n_features=n_channels)
-        self.critic = SharedCritic(n_features=n_channels)
+        self.spatial_features_net = spatial_model(**spatial_dict)
+        self.nonspatial_features_net = nonspatial_model(**nonspatial_dict) 
+        self.actor = SharedActor(action_space, n_features)
+        self.critic = SharedCritic(n_features)
         self._init_params_nets()
     
     def _init_params_nets(self):
@@ -93,7 +97,7 @@ class SpatialActorCritic(nn.Module):
                 if debug: print('size: ', size)
                 if len(size) == 1:
                     if debug: print("Init CategoricalNet for "+arg.name+' argument')
-                    self.arguments_networks[arg.name] = CategoricalNet(self.n_channels, size[0]) 
+                    self.arguments_networks[arg.name] = CategoricalNet(self.n_features, size[0]) 
                     self.arguments_type[arg.name] = 'categorical'
                 else:
                     if debug: print("Init SpatialNet for "+arg.name+' argument')
@@ -111,18 +115,10 @@ class SpatialActorCritic(nn.Module):
         if debug: 
             print("logits shape: ", logits.shape)
             print("logits: ", logits)
-            
-        #mask = self.get_action_mask(available_actions)
+
         if debug: 
             print("mask shape: ", mask.shape)
             print("mask: ", mask)
-            
-        #if logits.is_cuda:
-        #    logits[mask] = torch.tensor(np.NINF, requires_grad = True).cuda()
-        #else:
-        #    logits[mask] = torch.tensor(np.NINF, requires_grad = True)
-                
-        #if debug: print("logits (after mask): ", logits)
             
         log_probs = F.log_softmax(logits.masked_fill((mask).bool(), float('-inf')), dim=-1) 
         
