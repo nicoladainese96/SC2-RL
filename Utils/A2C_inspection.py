@@ -37,7 +37,7 @@ class InspectionDict():
         return
     
     def save_dict(self, path='Results/MoveToBeacon/Inspection/'):
-        np.save(path+PID+"_"+str(step_idx), self.dict)
+        np.save(path+self.PID+"_"+str(self.step_idx), self.dict)
         return
     
 def inspection_step(agent, state, action_mask):

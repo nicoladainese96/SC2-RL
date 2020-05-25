@@ -2,6 +2,10 @@ import torch
 import torch.multiprocessing as mp
 import time
 import numpy as np
+import string
+import random
+
+from Utils.A2C_inspection import *
 
 from pysc2.env import sc2_env
 from pysc2.lib import features
@@ -27,6 +31,11 @@ _PLAYER_NEUTRAL = 3
 _PLAYER_HOSTILE = 4
 
 debug=False
+
+def gen_PID():
+    ID = ''.join([random.choice(string.ascii_letters) for _ in range(4)])
+    ID = ID.upper()
+    return ID
 
 def get_action_mask(available_actions):
     action_mask = ~np.array([action_dict[i] in available_actions for i in action_dict.keys()])
@@ -187,3 +196,157 @@ class ParallelEnv:
         for worker in self.workers:
             worker.join()
             self.closed = True
+            
+def train_batched_A2C(agent, game_params, lr, n_train_processes, max_train_steps, 
+                      unroll_length, max_episode_steps, test_interval=100, num_tests=5):
+    
+    replay_dict = dict(save_replay_episodes=num_tests,
+                       replay_dir='Replays/',
+                       replay_prefix='A2C')
+    test_env = init_game(game_params, max_episode_steps, **replay_dict) # save just test episodes
+    envs = ParallelEnv(n_train_processes, game_params, max_episode_steps)
+
+    optimizer = torch.optim.Adam(agent.AC.parameters(), lr=lr)
+    PID = gen_PID()
+    
+    score = []
+    critic_losses = [] 
+    actor_losses = []
+    entropies = []
+    
+    step_idx = 0
+    while step_idx < max_train_steps:
+        s_lst, r_lst, done_lst, bootstrap_lst, s_trg_lst = list(), list(), list(), list(), list(), list()
+        log_probs = []
+        distributions = []
+        s, a_mask = envs.reset()
+        for _ in range(unroll_length):
+
+            a, log_prob, probs = agent.step(s, a_mask)
+            log_probs.append(log_prob)
+            distributions.append(probs)
+
+            s_prime, r, done, bootstrap, s_trg, a_mask = envs.step(a)
+            s_lst.append(s)
+            r_lst.append(r)
+            done_lst.append(done)
+            bootstrap_lst.append(bootstrap)
+            s_trg_lst.append(s_trg)
+
+            s = s_prime
+            step_idx += 1 #n_train_processes
+
+        s_lst = np.array(s_lst).transpose(1,0,2,3,4)
+        r_lst = np.array(r_lst).transpose(1,0)
+        done_lst = np.array(done_lst).transpose(1,0)
+        bootstrap_lst = np.array(bootstrap_lst).transpose(1,0)
+        s_trg_lst = np.array(s_trg_lst).transpose(1,0,2,3,4)
+
+        critic_loss, actor_loss, entropy = agent.compute_ac_loss(r_lst, log_probs, distributions, 
+                                                                 s_lst, done_lst, bootstrap_lst, s_trg_lst)
+
+        
+        loss = (critic_loss + actor_loss).mean()
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        
+        critic_losses.append(critic_loss.item())
+        actor_losses.append(actor_loss.item())
+        entropies.append(entropy.item())
+        
+        ### Test time ###
+        if step_idx % test_interval == 0:
+            avg_score, inspector = test(step_idx, agent, test_env, PID, num_tests)
+            score.append(avg_score)
+            # save episode for inspection and model weights at that point
+            inspector.save_dict()
+            torch.save(agent.AC.state_dict(), "Results/MoveToBeacon/Checkpoints/"+PID+"_"+str(step_idx))
+    envs.close()
+    
+    losses = dict(critic_losses=critic_losses, actor_losses=actor_losses, entropies=entropies)
+    return score, losses, agent, PID
+
+def test(step_idx, agent, test_env, process_ID, num_test=5):
+    score = 0.0
+    done = False
+    
+    ### Standard tests ###
+    for _ in range(num_test-1):
+        
+        obs = test_env.reset()
+        s = get_ohe_state(obs)[np.newaxis, ...] # add batch dim
+        available_actions = obs[0].observation.available_actions
+        a_mask = get_action_mask(available_actions)[np.newaxis, ...] # add batch dim
+        
+        while not done:
+            a, log_prob, probs = agent.step(s, a_mask)
+            obs = test_env.step(a)
+            s_prime = get_ohe_state(obs)[np.newaxis, ...] # add batch dim
+            reward = obs[0].reward
+            done = obs[0].last()
+            available_actions = obs[0].observation.available_actions
+            a_mask = get_action_mask(available_actions)[np.newaxis, ...] # add batch dim
+            
+            s = s_prime
+            score += reward
+        done = False
+        
+    ### Inspection test ###
+    G, inspector = inspection_test(step_idx, agent, test_env, process_ID)
+    score += G
+    print(f"Step # : {step_idx}, avg score : {score/num_test:.1f}")
+    return score/num_test, inspector
+
+def inspection_test(step_idx, agent, test_env, process_ID):
+    inspector = InspectionDict(step_idx, process_ID)
+    
+    obs = test_env.reset()
+    s = get_ohe_state(obs)[np.newaxis, ...] # add batch dim
+    
+    available_actions = obs[0].observation.available_actions
+    a_mask = get_action_mask(available_actions)[np.newaxis, ...] # add batch dim
+    
+    done = False
+    G = 0.0
+    # list used for update
+    s_lst, r_lst, done_lst, bootstrap_lst, s_trg_lst = list(), list(), list(), list(), list()
+    log_probs = []
+    distributions = []
+    while not done:
+        inspector.dict['state_traj'].append(s)
+        a, log_prob, probs, step_dict = inspection_step(agent, s, a_mask)
+        inspector.store_step(step_dict)
+        log_probs.append(log_prob)
+        distributions.append(probs)
+        
+        obs = test_env.step(a)
+        s_prime = get_ohe_state(obs)[np.newaxis, ...] # add batch dim
+        reward = obs[0].reward
+        done = obs[0].last()
+        available_actions = obs[0].observation.available_actions
+        a_mask = get_action_mask(available_actions)[np.newaxis, ...] # add batch dim
+        if done:
+            bootstrap = True
+        else:
+            bootstrap = False
+            
+        s_lst.append(s)
+        r_lst.append(reward)
+        done_lst.append(done)
+        bootstrap_lst.append(bootstrap)
+        s_trg_lst.append(s_prime)
+            
+        s = s_prime
+        G += reward
+        
+    inspector.dict['rewards'] = r_lst
+    s_lst = np.array(s_lst).transpose(1,0,2,3,4)
+    r_lst = np.array(r_lst).reshape(1,-1)
+    done_lst = np.array(done_lst).reshape(1,-1)
+    bootstrap_lst = np.array(bootstrap_lst).reshape(1,-1)
+    s_trg_lst = np.array(s_trg_lst).transpose(1,0,2,3,4)    
+    update_dict = inspection_update(agent, r_lst, log_probs, distributions, s_lst, 
+                                    done_lst, bootstrap_lst, s_trg_lst)
+    inspector.store_update(update_dict)
+    return G, inspector
