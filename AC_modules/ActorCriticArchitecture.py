@@ -18,24 +18,26 @@ debug = False
 class SharedActor(nn.Module):
     def __init__(self, action_space, n_features):
         super(SharedActor, self).__init__()
-        self.linear = nn.Sequential(
-                        nn.Linear(n_features, 256),
-                        nn.ReLU(),
-                        nn.Linear(256, action_space))
-        #self.linear = nn.Linear(n_features, action_space)
+        #self.linear = nn.Sequential(
+        #                nn.Linear(n_features, 256),
+        #                nn.ReLU(),
+        #                nn.Linear(256, action_space))
+        self.linear = nn.Linear(n_features, action_space)
         
     def forward(self, shared_repr):
-        log_probs = F.log_softmax(self.linear(shared_repr), dim=1)
-        return log_probs
+        # CHECK THIS OUT
+        #log_probs = F.log_softmax(self.linear(shared_repr), dim=1)
+        logits = self.linear(shared_repr)
+        return logits
     
 class SharedCritic(nn.Module):
     def __init__(self, n_features):
         super(SharedCritic, self).__init__()
-        self.net = nn.Sequential(
-                        nn.Linear(n_features, 256),
-                        nn.ReLU(),
-                        nn.Linear(256, 1))
-        #self.net = nn.Linear(n_features, 1)
+        #self.net = nn.Sequential(
+        #                nn.Linear(n_features, 256),
+        #                nn.ReLU(),
+        #                nn.Linear(256, 1))
+        self.net = nn.Linear(n_features, 1)
         
     def forward(self, shared_repr):
         V = self.net(shared_repr)
@@ -80,7 +82,7 @@ class SpatialActorCritic(nn.Module):
         self._init_params_nets()
     
     def _init_params_nets(self):
-        self.arguments_networks = {}
+        arguments_networks = {}
         self.arguments_dict = {}
         self.arguments_type = {}
         self.act_to_arg_names = {}
@@ -96,32 +98,28 @@ class SpatialActorCritic(nn.Module):
                 size = self.all_arguments[arg.id].sizes
                 if debug: print('size: ', size)
                 if len(size) == 1:
-                    if debug: print("Init CategoricalNet for "+arg.name+' argument')
-                    self.arguments_networks[arg.name] = CategoricalNet(self.n_features, size[0]) 
+                    if debug: 
+                        print("Init CategoricalNet for "+arg.name+' argument')
+                    #SCRIPTING TO ALWAYS CHOOSE NOT QUEUED
+                    arguments_networks[arg.name] = CategoricalNet(self.n_features, 1) 
+                    #arguments_networks[arg.name] = CategoricalNet(self.n_features, size[0]) 
                     self.arguments_type[arg.name] = 'categorical'
                 else:
                     if debug: print("Init SpatialNet for "+arg.name+' argument')
-                    self.arguments_networks[arg.name] = SpatialParameters(self.n_channels, size[0]) 
+                    arguments_networks[arg.name] = SpatialParameters(self.n_channels, size[0]) 
+                    
                     self.arguments_type[arg.name] = 'spatial'
+                    
+        self.arguments_networks = nn.ModuleDict(arguments_networks)
         
         return
     
     def pi(self, state, mask):
-        
         spatial_features = self.spatial_features_net(state)
         nonspatial_features = self.nonspatial_features_net(spatial_features)
-        
-        logits = self.actor(nonspatial_features)
-        if debug: 
-            print("logits shape: ", logits.shape)
-            print("logits: ", logits)
-
-        if debug: 
-            print("mask shape: ", mask.shape)
-            print("mask: ", mask)
-            
+        # here logits were changed
+        logits = self.actor(nonspatial_features) 
         log_probs = F.log_softmax(logits.masked_fill((mask).bool(), float('-inf')), dim=-1) 
-        
         return log_probs, spatial_features, nonspatial_features
     
     def V_critic(self, state):
@@ -141,24 +139,24 @@ class SpatialActorCritic(nn.Module):
     #    action_mask = ~np.array([self.action_dict[i] in available_actions for i in self.action_dict.keys()])
     #    return action_mask
     
-    def to(self, device):
-        """Wrapper of .to method to load the model on GPU/CPU"""
-        self.spatial_features_net.to(device)
-        self.nonspatial_features_net.to(device)
-        self.actor.to(device)
-        self.critic.to(device)
+    #def to(self, device):
+    #    """Wrapper of .to method to load the model on GPU/CPU"""
+    #    self.spatial_features_net.to(device)
+    #    self.nonspatial_features_net.to(device)
+    #    self.actor.to(device)
+    #    self.critic.to(device)
         # this part here is not loaded automatically
-        for key in self.arguments_networks:
-            self.arguments_networks[key].to(device) 
+    #    for key in self.arguments_networks:
+    #        self.arguments_networks[key].to(device) 
             
-    def parameters(self):
+    #def parameters(self):
         # need to pass them by hand, because the argument networks' parameters are not read automatically
-        params = [self.actor.parameters()]+\
-                 [self.spatial_features_net.parameters()]+\
-                 [self.nonspatial_features_net.parameters()]+\
-                 [self.actor.parameters()]+\
-                 [self.critic.parameters()]+\
-                 [self.arguments_networks[key].parameters() for key in self.arguments_networks]
-        return it.chain(*params)
+    #    params = [self.actor.parameters()]+\
+    #             [self.spatial_features_net.parameters()]+\
+    #             [self.nonspatial_features_net.parameters()]+\
+    #             [self.actor.parameters()]+\
+    #             [self.critic.parameters()]+\
+    #             [self.arguments_networks[key].parameters() for key in self.arguments_networks]
+    #    return it.chain(*params)
    
     
