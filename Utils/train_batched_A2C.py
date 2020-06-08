@@ -1,9 +1,11 @@
 import torch
 import torch.multiprocessing as mp
+import matplotlib.pyplot as plt
 import time
 import numpy as np
 import string
 import random
+import copy
 
 from Utils.A2C_inspection import *
 
@@ -31,6 +33,7 @@ _PLAYER_NEUTRAL = 3
 _PLAYER_HOSTILE = 4
 
 debug=False
+simplified = True
 
 def gen_PID():
     ID = ''.join([random.choice(string.ascii_letters) for _ in range(4)])
@@ -40,6 +43,12 @@ def gen_PID():
 def get_action_mask(available_actions):
     action_mask = ~np.array([action_dict[i] in available_actions for i in action_dict.keys()])
     return action_mask
+
+def select_army_mask():
+    return np.array([True, False, True])
+
+def move_screen_mask():
+    return np.array([True, True, False])
 
 def get_coord_state(obs):
 
@@ -67,19 +76,41 @@ def get_coord_state(obs):
 
     return state
 
-def get_ohe_state(obs):
+def get_6chan_ohe_state(obs):
+    feature_screen = obs[0].observation['feature_screen']
     
-    player_relative = obs[0].observation['feature_screen'][_PLAYER_RELATIVE]
-    selected = obs[0].observation['feature_screen'][_SELECTED].astype(float)
+    player_relative_idx = feature_screen._index_names[0]['player_relative']
+    player_relative = feature_screen[player_relative_idx]
+    
+    state = np.zeros((6,)+player_relative.shape).astype(float)
     
     friendly = (player_relative == _PLAYER_FRIENDLY).astype(float)
     neutral = (player_relative == _PLAYER_NEUTRAL).astype(float)
-    
-    state = np.zeros((3,)+player_relative.shape).astype(float)
     state[0] = friendly
     state[1] = neutral
-    state[2] = selected
-       
+    
+    layer_names = ['selected', 'visibility_map', 'unit_density', 'unit_density_aa']
+    for i in range(len(layer_names)):
+        layer_idx = feature_screen._index_names[0][layer_names[i]]
+        state[i+2] = feature_screen[layer_idx].astype(float)
+
+    return state
+
+def get_ohe_state(obs):
+    feature_screen = obs[0].observation['feature_screen']
+    
+    player_relative_idx = feature_screen._index_names[0]['player_relative']
+    player_relative = feature_screen[player_relative_idx]
+    
+    state = np.zeros((2,)+player_relative.shape).astype(float)
+    
+    neutral = (player_relative == _PLAYER_NEUTRAL).astype(float)
+    state[1] = neutral
+    
+    layer_idx = feature_screen._index_names[0]['unit_density']
+    layer = feature_screen[layer_idx].astype(float) - neutral
+    state[0] = layer
+
     return state
 
 def init_game(game_params, max_steps=256, step_multiplier=8, **kwargs):
@@ -111,7 +142,10 @@ def worker(worker_id, master_end, worker_end, game_params, max_steps):
             reward = obs[0].reward
             done = obs[0].last()
             available_actions = obs[0].observation.available_actions
-            action_mask = get_action_mask(available_actions)
+            if simplified:
+                action_mask = move_screen_mask()
+            else:
+                action_mask = get_action_mask(available_actions)
             
             # Always bootstrap when episode finishes (in MoveToBeacon there is no real end)
             if done:
@@ -134,7 +168,10 @@ def worker(worker_id, master_end, worker_end, game_params, max_steps):
             obs = env.reset()
             state = get_ohe_state(obs)
             available_actions = obs[0].observation.available_actions
-            action_mask = get_action_mask(available_actions)
+            if simplified:
+                action_mask = select_army_mask()
+            else:
+                action_mask = get_action_mask(available_actions)
             
             worker_end.send((state, action_mask))
         elif cmd == 'close':
@@ -208,23 +245,97 @@ def train_batched_A2C(agent, game_params, lr, n_train_processes, max_train_steps
 
     optimizer = torch.optim.Adam(agent.AC.parameters(), lr=lr)
     PID = gen_PID()
+    print("Process ID: ", PID)
+    score = []
+    critic_losses = [] 
+    actor_losses = []
+    entropy_losses = []
+    
+    step_idx = 0
+    while step_idx < max_train_steps:
+        s_lst, r_lst, done_lst, bootstrap_lst, s_trg_lst = list(), list(), list(), list(), list()
+        log_probs = []
+        entropies = []
+        s, a_mask = envs.reset()
+        for _ in range(unroll_length):
+
+            a, log_prob, entropy = agent.step(s, a_mask)
+            # variables with gradient
+            log_probs.append(log_prob)
+            entropies.append(entropy)
+
+            s_prime, r, done, bootstrap, s_trg, a_mask = envs.step(a)
+            s_lst.append(s)
+            r_lst.append(r)
+            done_lst.append(done)
+            bootstrap_lst.append(bootstrap)
+            s_trg_lst.append(s_trg)
+
+            s = s_prime
+            step_idx += 1 #n_train_processes
+
+        # all variables without gradient
+        s_lst = np.array(s_lst).transpose(1,0,2,3,4)
+        r_lst = np.array(r_lst).transpose(1,0)
+        done_lst = np.array(done_lst).transpose(1,0)
+        bootstrap_lst = np.array(bootstrap_lst).transpose(1,0)
+        s_trg_lst = np.array(s_trg_lst).transpose(1,0,2,3,4)
+
+        critic_loss, actor_loss, entropy_term = agent.compute_ac_loss(r_lst, log_probs, entropies, 
+                                                                 s_lst, done_lst, bootstrap_lst, s_trg_lst)
+
+        
+        loss = (critic_loss + actor_loss).mean()
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+            
+        critic_losses.append(critic_loss.item())
+        actor_losses.append(actor_loss.item())
+        entropy_losses.append(entropy_term.item())
+        
+        
+        ### Test time ###
+        if step_idx % test_interval == 0:
+            avg_score, inspector = test(step_idx, agent, test_env, PID, num_tests)
+            score.append(avg_score)
+            # save episode for inspection and model weights at that point
+            inspector.save_dict()
+            torch.save(agent.AC.state_dict(), "Results/MoveToBeacon/Checkpoints/"+PID+"_"+str(step_idx))
+    envs.close()
+    
+    losses = dict(critic_losses=critic_losses, actor_losses=actor_losses, entropies=entropy_losses)
+    return score, losses, agent, PID
+
+def train_from_checkpoint(agent, game_params, lr, n_train_processes, max_train_steps, 
+                      unroll_length, max_episode_steps, PID, step_idx, test_interval=100, num_tests=5):
+    
+    agent.AC.load_state_dict(torch.load("Results/MoveToBeacon/Checkpoints/"+PID+"_"+str(step_idx)))
+    agent.AC.to(agent.device) 
+    
+    replay_dict = dict(save_replay_episodes=num_tests,
+                       replay_dir='Replays/',
+                       replay_prefix='A2C')
+    test_env = init_game(game_params, max_episode_steps, **replay_dict) # save just test episodes
+    envs = ParallelEnv(n_train_processes, game_params, max_episode_steps)
+
+    optimizer = torch.optim.Adam(agent.AC.parameters(), lr=lr)
     
     score = []
     critic_losses = [] 
     actor_losses = []
-    entropies = []
+    entropy_losses = []
     
-    step_idx = 0
     while step_idx < max_train_steps:
-        s_lst, r_lst, done_lst, bootstrap_lst, s_trg_lst = list(), list(), list(), list(), list(), list()
+        s_lst, r_lst, done_lst, bootstrap_lst, s_trg_lst = list(), list(), list(), list(), list()
         log_probs = []
-        distributions = []
+        entropies = []
         s, a_mask = envs.reset()
         for _ in range(unroll_length):
 
-            a, log_prob, probs = agent.step(s, a_mask)
+            a, log_prob, entropy = agent.step(s, a_mask)
             log_probs.append(log_prob)
-            distributions.append(probs)
+            entropies.append(entropy)
 
             s_prime, r, done, bootstrap, s_trg, a_mask = envs.step(a)
             s_lst.append(s)
@@ -242,7 +353,7 @@ def train_batched_A2C(agent, game_params, lr, n_train_processes, max_train_steps
         bootstrap_lst = np.array(bootstrap_lst).transpose(1,0)
         s_trg_lst = np.array(s_trg_lst).transpose(1,0,2,3,4)
 
-        critic_loss, actor_loss, entropy = agent.compute_ac_loss(r_lst, log_probs, distributions, 
+        critic_loss, actor_loss, entropy_term = agent.compute_ac_loss(r_lst, log_probs, entropies, 
                                                                  s_lst, done_lst, bootstrap_lst, s_trg_lst)
 
         
@@ -253,7 +364,7 @@ def train_batched_A2C(agent, game_params, lr, n_train_processes, max_train_steps
         
         critic_losses.append(critic_loss.item())
         actor_losses.append(actor_loss.item())
-        entropies.append(entropy.item())
+        entropy_losses.append(entropy_term.item())
         
         ### Test time ###
         if step_idx % test_interval == 0:
@@ -264,7 +375,7 @@ def train_batched_A2C(agent, game_params, lr, n_train_processes, max_train_steps
             torch.save(agent.AC.state_dict(), "Results/MoveToBeacon/Checkpoints/"+PID+"_"+str(step_idx))
     envs.close()
     
-    losses = dict(critic_losses=critic_losses, actor_losses=actor_losses, entropies=entropies)
+    losses = dict(critic_losses=critic_losses, actor_losses=actor_losses, entropies=entropy_losses)
     return score, losses, agent, PID
 
 def test(step_idx, agent, test_env, process_ID, num_test=5):
@@ -277,7 +388,10 @@ def test(step_idx, agent, test_env, process_ID, num_test=5):
         obs = test_env.reset()
         s = get_ohe_state(obs)[np.newaxis, ...] # add batch dim
         available_actions = obs[0].observation.available_actions
-        a_mask = get_action_mask(available_actions)[np.newaxis, ...] # add batch dim
+        if simplified:
+            a_mask = select_army_mask()[np.newaxis, ...] # add batch dim
+        else:
+            a_mask = get_action_mask(available_actions)[np.newaxis, ...] # add batch dim
         
         while not done:
             a, log_prob, probs = agent.step(s, a_mask)
@@ -286,7 +400,10 @@ def test(step_idx, agent, test_env, process_ID, num_test=5):
             reward = obs[0].reward
             done = obs[0].last()
             available_actions = obs[0].observation.available_actions
-            a_mask = get_action_mask(available_actions)[np.newaxis, ...] # add batch dim
+            if simplified:
+                a_mask = move_screen_mask()[np.newaxis, ...] # add batch dim
+            else:
+                a_mask = get_action_mask(available_actions)[np.newaxis, ...] # add batch dim
             
             s = s_prime
             score += reward
@@ -305,32 +422,50 @@ def inspection_test(step_idx, agent, test_env, process_ID):
     s = get_ohe_state(obs)[np.newaxis, ...] # add batch dim
     
     available_actions = obs[0].observation.available_actions
-    a_mask = get_action_mask(available_actions)[np.newaxis, ...] # add batch dim
+    if simplified:
+        a_mask = select_army_mask()[np.newaxis, ...] # add batch dim
+    else:
+        a_mask = get_action_mask(available_actions)[np.newaxis, ...] # add batch dim
     
     done = False
     G = 0.0
     # list used for update
     s_lst, r_lst, done_lst, bootstrap_lst, s_trg_lst = list(), list(), list(), list(), list()
     log_probs = []
-    distributions = []
+    entropies = []
     while not done:
-        inspector.dict['state_traj'].append(s)
-        a, log_prob, probs, step_dict = inspection_step(agent, s, a_mask)
+        ###
+        #player_y, player_x = s[0][0].nonzero()
+        #if len(player_y) != 0:
+        #    print("\nLast pos: (y,x)=(%d,%d)"%(player_y, player_x))
+        ###
+        a, log_prob, entropy, step_dict = inspection_step(agent, s, a_mask)
         inspector.store_step(step_dict)
         log_probs.append(log_prob)
-        distributions.append(probs)
-        
+        entropies.append(entropy)
+        ###
+        #print("action: ", a)
+        ###
         obs = test_env.step(a)
         s_prime = get_ohe_state(obs)[np.newaxis, ...] # add batch dim
+        ###
+        #player_y, player_x = s_prime[0][0].nonzero()
+        #if len(player_y) != 0:
+        #    print("Current pos: (y,x)=(%d,%d)"%(player_y, player_x))
+        ###
         reward = obs[0].reward
         done = obs[0].last()
         available_actions = obs[0].observation.available_actions
-        a_mask = get_action_mask(available_actions)[np.newaxis, ...] # add batch dim
+        if simplified:
+            a_mask = move_screen_mask()[np.newaxis, ...] # add batch dim
+        else:
+            a_mask = get_action_mask(available_actions)[np.newaxis, ...] # add batch dim
         if done:
             bootstrap = True
         else:
             bootstrap = False
             
+        inspector.dict['state_traj'].append(s)
         s_lst.append(s)
         r_lst.append(reward)
         done_lst.append(done)
@@ -346,7 +481,7 @@ def inspection_test(step_idx, agent, test_env, process_ID):
     done_lst = np.array(done_lst).reshape(1,-1)
     bootstrap_lst = np.array(bootstrap_lst).reshape(1,-1)
     s_trg_lst = np.array(s_trg_lst).transpose(1,0,2,3,4)    
-    update_dict = inspection_update(agent, r_lst, log_probs, distributions, s_lst, 
+    update_dict = inspection_update(agent, r_lst, log_probs, entropies, s_lst, 
                                     done_lst, bootstrap_lst, s_trg_lst)
     inspector.store_update(update_dict)
     return G, inspector
