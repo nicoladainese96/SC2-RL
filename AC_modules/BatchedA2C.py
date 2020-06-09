@@ -36,8 +36,7 @@ debug = False
 
 class MoveToBeaconSpatialA2C():
     """
-    Advantage Actor-Critic RL agent for BoxWorld environment described in the paper
-    Relational Deep Reinforcement Learning.
+    Advantage Actor-Critic RL agent restricted to MoveToBeacon StarCraftII minigame.
     
     Notes
     -----
@@ -51,139 +50,114 @@ class MoveToBeaconSpatialA2C():
         ----------
         action_space: int
             Number of (discrete) possible actions to take
+            Does not count the actions'parameters
+        env: SC2Env instance
+            Needed for action specs
+        spatial_model: nn.Module (not intialized)
+            Takes as input (batch, in_channels, resolution, resolution)
+            Returns (batch, n_channels, resolution, resolution)
+        nonspatial_model: nn.Module (not intialized)
+            Takes as input (batch, n_channels, resolution, resolution)
+            Returns (batch, n_features)
+        spatial_dict, nonspatial_dict: dict
+            HPs of the two models, used as spatial_model(**spatial_dict)
+            to initialize them
+        n_features: int
+            Output dim of nonspatial_model
+        n_channels: int
+            Output channels of spatial_model and input channels for nonspatial_model
+            and SpatialParameters networks
         gamma: float in [0,1]
             Discount factor
         H: float (default 1e-3)
             Entropy multiplicative factor in actor's loss
-        n_steps: int (default 1)
+        n_steps: int (default 20)
             Number of steps considered in TD update
         device: str in {'cpu','cuda'}
             Whether to use CPU or GPU
-        **net_args: dict (optional)
-            Dictionary of {'key':value} pairs valid for OheNet.
-            
         """
         
         self.gamma = gamma
-        
         self.n_actions = action_space
         self.n_steps = n_steps
         self.H = H
-        
         self.AC = SpatialActorCritic(action_space, env, spatial_model, nonspatial_model, spatial_dict, 
                                      nonspatial_dict, n_features, n_channels)
-     
         self.device = device 
         self.AC.to(self.device) 
 
     def step(self, state, action_mask):
         state = torch.from_numpy(state).float().to(self.device)
         action_mask = torch.tensor(action_mask).to(self.device)
-            
+        
         log_probs, spatial_features, nonspatial_features = self.AC.pi(state, action_mask)
-        if debug: 
-            print("log_probs: ", log_probs)
-            
         probs = torch.exp(log_probs)
         entropy = self.compute_entropy(probs)
-        if debug: 
-            print("probs: ", probs)
-            print("entropy (main actor): ", entropy)
-            
         a = Categorical(probs).sample()
         a = a.detach().cpu().numpy()
         log_prob = log_probs[range(len(a)), a]
-        if debug: 
-            print("log_prob: ", log_prob)
-
-        action_id = np.array([self.AC.action_dict[act] for act in a])
-        if debug: 
-            print("action_id: ", action_id)
-            print("a: ", a)
-        args, args_log_prob, args_entropy = self.get_arguments(state, nonspatial_features, a)
-        if debug: 
-            print("\nargs: ", args)
-            print("args_log_prob.shape; ", args_log_prob.shape)
-            print("args_log_prob: ", args_log_prob)
-            print("log_prob.shape: ", log_prob.shape)
-            print("log_prob: ", log_prob)
-
+        
+        args, args_log_prob, args_entropy = self.get_arguments(spatial_features, nonspatial_features, a)
         log_prob = log_prob + args_log_prob
         entropy = entropy + args_entropy
-        if debug: 
-            print("args_log_prob: ", args_log_prob)
-            print("log_prob (after sum): ", log_prob)
-            print("entropy (after sum): ", entropy)
-            
+
+        action_id = np.array([self.AC.action_dict[act] for act in a])
         action = [actions.FunctionCall(action_id[i], args[i]) for i in range(len(action_id))]
-        if debug: print("action: ", action)
-        
+
         return action, log_prob, torch.mean(entropy)
 
-    def get_arguments(self, state, nonspatial_features, action):
-        
+    def get_arguments(self, spatial_features, nonspatial_features, action):
+        """
+        Samples all possible arguments for each sample in the batch, then selects only those that
+        apply to the selected actions and returns a list containing the list of arguments for every 
+        sampled action, the logarithm of the probability of sampling those arguments and the entropy 
+        of their distributions. If an action has more arguments the log probs and the entropies returned
+        are the sum of all those of the single arguments.
+        """
+        ### Sample and store each argument with its log prob and entropy ###
         results = {}    
         for arg_name in self.AC.arguments_dict.keys():
             if self.AC.arguments_type[arg_name] == 'categorical':
                 arg_sampled, log_prob, probs = self.AC.sample_param(nonspatial_features, arg_name)
             elif self.AC.arguments_type[arg_name] == 'spatial':
-                arg_sampled, log_prob, probs = self.AC.sample_param(state, arg_name)
+                arg_sampled, log_prob, probs = self.AC.sample_param(spatial_features, arg_name)
             else:
-                raise Exception("argument type for "+arg_name+" not understood")
-                
+                raise Exception("argument type for "+arg_name+" not understood")  
             entropy = self.compute_entropy(probs)
-            if debug:
-                print("\narg_name : "+arg_name)
-                print("arg_sampled: ", arg_sampled)
-                print("log_prob: ", log_prob)
-                print("entropy: ", entropy)
-            
             results[arg_name] = (arg_sampled, log_prob, entropy)
            
+        ### For every action get the list of arguments and their log prob and entropy ###
         args, args_log_prob, args_entropy = [], [], []
         for i, a in enumerate(action):
+            # default return values if no argument is sampled (like if there was a single value obtained with p=1)
             arg = []
             arg_log_prob = torch.tensor([0]).float().to(self.device)
             entropies = torch.tensor([0]).float().to(self.device)
             
             arg_names = self.AC.act_to_arg_names[a]
-            if debug: print("\narg_names: ", arg_names)
             values = list( map(results.get, arg_names) )
-            if debug: 
-                print("values: ", values)
-                print("len(values): ", len(values))
-                print("len(arg_names): ", len(arg_names))
             if len(values) != 0:
-                if debug: 
-                    print("len(values[0]): ", len(values[0]))
-                    print("values[0]: ", values[0])
                 for j in range(len(values)):
-                    if debug:
-                        print('values[%d][0,i]'%j, values[j][0][i])
-                        print('values[%d][1,i]'%j, values[j][1][i])
-                        print('values[%d][2,i]'%j, values[j][2][i])
+                    # j is looping on the tuples (arg, log_prob, ent)
+                    # Second index is for accessing tuples items
+                    # i is for the sample index inside the batch
                     arg.append(list(values[j][0][i]))
                     arg_log_prob = arg_log_prob + values[j][1][i] # sum log_probs
                     entropies = entropies + values[j][2][i] # sum entropies
-            if debug:
-                print("arg: ", arg)
-                print('arg_log_prob: ', arg_log_prob) # requires gradient now?
             args.append(arg)
             args_log_prob.append(arg_log_prob) 
             args_entropy.append(entropies)
+            
         args_log_prob = torch.stack(args_log_prob, axis=0).squeeze()
         args_entropy = torch.stack(args_entropy, axis=0).squeeze()
         return args, args_log_prob, args_entropy
  
     def compute_entropy(self, probs):
         """
-        Computes negative entropy of a batch (b, n_actions) of probabilities.
+        Computes NEGATIVE entropy of a batch (b, n_actions) of probabilities.
         Returns the entropy of each sample in the batch (b,)
         """
-        #mask = (probs == 0).nonzero()
-        #probs[mask[:,0], mask[:,1]] = 1e-5
-        # add a small regularization to probs
-        probs = probs + torch.tensor([1e-5]).float().to(self.device)
+        probs = probs + torch.tensor([1e-5]).float().to(self.device) # add a small regularization to probs 
         entropy = torch.sum(probs*torch.log(probs), axis=1)
         return entropy
     
@@ -191,9 +165,9 @@ class MoveToBeaconSpatialA2C():
         # merge batch and episode dimensions
         old_states = torch.tensor(states).float().to(self.device).reshape((-1,)+states.shape[2:])
 
-        average_n_steps = False
+        average_n_steps = False # TRY ME
         if average_n_steps:
-            ### Use as V target the mean of 1-step to n-step V targets
+            # Use as V target the mean of 1-step to n-step V targets
             V_trg = []
             for n in range(1, self.n_steps + 1):
                 n_step_V_trg = self.compute_n_step_V_trg(n, rewards, done, bootstrap, states)
@@ -201,25 +175,23 @@ class MoveToBeaconSpatialA2C():
             V_trg = torch.mean(torch.stack(V_trg, axis=0), axis=0)
         else:
             V_trg = self.compute_n_step_V_trg(self.n_steps, rewards, done, bootstrap, states)
-        if debug: 
-            print("V_trg.shape: ", V_trg.shape)
-            print("V_trg: ", V_trg)
             
         ### Wrap variables into tensors - merge batch and episode dimensions ###    
         log_probs = torch.stack(log_probs).to(self.device).transpose(1,0).reshape(-1)
-        if debug: 
-            print("log_probs.shape: ", log_probs.shape)
-            print("log_probs: ", log_probs)
         entropies = torch.stack(entropies, axis=0).to(self.device).reshape(-1)
-        if debug: print("entropies.shape: ", entropies.shape)
         
-        ### Update critic and then actor ###
+        ### Compute critic and actor losses ###
         critic_loss = self.compute_critic_loss(old_states, V_trg)
         actor_loss, entropy = self.compute_actor_loss(log_probs, entropies, old_states, V_trg)
 
         return critic_loss, actor_loss, entropy
     
     def compute_n_step_V_trg(self, n_steps, rewards, done, bootstrap, states):
+        """
+        Compute m-steps value target, with m = min(n, steps-to-episode-end).
+        Formula (for precisely n-steps):
+            V^{(n)}(t) = \sum_{k=0}^{n-1} gamma^k r_{t+k} + gamma^n * V(s_t)
+        """
         n_step_rewards, episode_mask, n_steps_mask_b = self.compute_n_step_rewards(rewards, done, n_steps)
         done[bootstrap] = False 
         new_states, Gamma_V, done = self.compute_n_step_states(states, done, episode_mask, n_steps_mask_b)
@@ -233,7 +205,6 @@ class MoveToBeaconSpatialA2C():
             V_pred = self.AC.V_critic(new_states).squeeze()
             V_trg = (1-done)*Gamma_V*V_pred + n_step_rewards
             V_trg = V_trg.squeeze()
-        if debug: print("V_trg.shape; ", V_trg.shape)
         return V_trg
     
     def compute_critic_loss(self, old_states, V_trg):
@@ -245,47 +216,27 @@ class MoveToBeaconSpatialA2C():
         with torch.no_grad():
             V_pred = self.AC.V_critic(old_states).squeeze()
         A = V_trg - V_pred
-        #A = (A - A.mean())/(A.std()+1e-5)
         policy_gradient = - log_probs*A
-        if debug:
-            print("V_trg.shape: ",V_trg.shape)
-            print("V_trg: ", V_trg)
-            print("V_pred.shape: ",V_pred.shape)
-            print("V_pred: ", V_pred)
-            print("A.shape: ", A.shape)
-            print("A: ", A)
-            print("policy_gradient.shape: ", policy_gradient.shape)
-            print("policy_gradient: ", policy_gradient)
         policy_grad = torch.mean(policy_gradient)
-        if debug: print("policy_grad: ", policy_grad)
-        
         entropy = torch.mean(entropies)
-        #print("policy_grad: ", policy_grad)
-        #print("Entropy: ", entropy)
         loss = policy_grad + self.H*entropy
-        if debug: print("Actor loss: ", loss)
-             
         return loss, entropy
                 
     def compute_n_step_rewards(self, rewards, done, n_steps=None):
         """
-        Computes n-steps discounted reward padding with zeros the last elements of the trajectory.
-        This means that the rewards considered are AT MOST n, but can be less for the last n-1 elements.
+        Computes n-steps discounted reward. 
+        Note: the rewards considered are AT MOST n, but can be less for the last n-1 elements.
         """
         if n_steps is None:
             n_steps = self.n_steps
-            
         B = done.shape[0]
         T = done.shape[1]
-        if debug:
-            print("batch size: ", B)
-            print("unroll len: ", T)
-        
         
         # Compute episode mask (i-th row contains 1 if col j is in the same episode of col i, 0 otherwise)
         episode_mask = [[] for _ in range(B)]
         last = [-1 for _ in range(B)]
         xs, ys = np.nonzero(done)
+        
         # Add done at the end of every batch to avoid exceptions -> not used in real target computations
         xs = np.concatenate([xs, np.arange(B)])
         ys = np.concatenate([ys, np.full(B, T-1)])
@@ -309,11 +260,6 @@ class MoveToBeaconSpatialA2C():
         
         # Exponential discount factor
         Gamma = np.array([self.gamma**i for i in range(T)]).reshape(1,-1)
-        if debug:
-            print("Gamma.shape: ", Gamma.shape)
-            print("rewards_repeated.shape: ", rewards_repeated.shape)
-            print("episode_mask.shape: ", episode_mask.shape)
-            print("n_steps_mask_b.shape: ", n_steps_mask_b.shape)
         n_steps_r = (Gamma*rewards_repeated*episode_mask*n_steps_mask_b).sum(axis=2)/Gamma
         return n_steps_r, episode_mask, n_steps_mask_b
     

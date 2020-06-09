@@ -206,55 +206,35 @@ class CategoricalNet(nn.Module):
 
 ### sample spatial parameters from a matrix-like state representation
 
+def unravel_index(index, shape):
+    out = []
+    for dim in reversed(shape):
+        out.append(index % dim)
+        index = index // dim
+    return tuple(reversed(out))
+
 class SpatialParameters(nn.Module):
     
     def __init__(self, n_channels, linear_size, in_channels=2):
         super(SpatialParameters, self).__init__()
         
         self.size = linear_size
-        self.conv = nn.Sequential(
-                                nn.Conv2d(in_channels, 16, kernel_size=5, stride=1, padding=2),
-                                nn.ReLU(),
-                                nn.Conv2d(16, n_channels, kernel_size=3, stride=1, padding=1),
-                                nn.ReLU(),
-                                nn.Conv2d(n_channels, 1, kernel_size=3, stride=1, padding=1)
-                                #nn.LayerNorm([linear_size, linear_size]),
-                                #nn.ReLU(),
-                                #nn.Conv2d(12, 1, kernel_size=1, stride=1, padding=0)
-                                )
+        self.conv = nn.Sequential(nn.Conv2d(n_channels, 1, kernel_size=3, stride=1, padding=1))
     
-    def forward(self, x):
+    def forward(self, x, x_first=True):
         B = x.shape[0]
         x = self.conv(x)
-        if debug: print("x.shape: ", x.shape)
         x = x.reshape((x.shape[0],-1))
-        if debug: print("x.shape: ", x.shape)
         log_probs = F.log_softmax(x, dim=(-1))
         probs = torch.exp(log_probs)
-        if debug: 
-            print("log_probs.shape: ", log_probs.shape)
-            print("log_probs.shape (reshaped): ", log_probs.view(-1, self.size, self.size).shape)
-            
-        # assume squared space
-        x_lin = torch.arange(self.size).unsqueeze(0)
-        #print("x_lin: ", x_lin)
-        xx = x_lin.repeat(B,self.size,1)
-        #print("xx: ", xx)
-        if debug: print("xx.shape: ", xx.shape)
-        args = torch.cat([xx.view(-1,self.size,self.size,1), xx.permute(0,2,1).view(-1,self.size,self.size,1)], axis=3)
-        #print("args[0,:,:,0]: ", args[0,:,:,0])
-        #print("args[0,:,:,1]: ", args[0,:,:,1])
-        if debug: print("args.shape (before reshaping): ", args.shape)
-        args = args.reshape(B,-1,2)
-        if debug: print("args.shape (after reshaping): ", args.shape)
-        #print("args (after reshape): ", args)
         index = Categorical(probs).sample()
-        arg = args[torch.arange(B), index].detach().numpy() # and this are the sampled coordinates
-        #print("index: ", index)
-        arg_lst = [list(a)  for a in arg]
-        #print("arg_lst: ", arg_lst)
-        log_probs = log_probs.reshape(B, self.size, self.size)
-        return arg_lst, log_probs[torch.arange(B), arg[:,0], arg[:,1]], probs   
+        y, x = unravel_index(index, (self.size,self.size))
+        if x_first:
+            arg_lst = [[xi.item(),yi.item()] for xi, yi in zip(x,y)]
+        else:
+            arg_lst = [[yi.item(),xi.item()] for xi, yi in zip(x,y)]
+        log_prob = log_probs[torch.arange(B), index]
+        return arg_lst, log_prob, probs
     
 class SpatialNet(nn.Module):
     

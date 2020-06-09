@@ -33,7 +33,7 @@ _PLAYER_NEUTRAL = 3
 _PLAYER_HOSTILE = 4
 
 debug=False
-simplified = True
+simplified = False
 
 def gen_PID():
     ID = ''.join([random.choice(string.ascii_letters) for _ in range(4)])
