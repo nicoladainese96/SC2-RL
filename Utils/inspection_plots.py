@@ -151,10 +151,12 @@ def plot_state(d, t, mask_queue=False):
     
     if t>0:
         s_last = d['state_traj'][t-1][0]
+        last_action = d['action_sel'][t-1][0]
         player_y, player_x = s_last[0].nonzero()
         rgb_map[player_y, player_x] = LAST_POS_COLOR
         click_x, click_y = d['spatial_sel'][t-1]
-        rgb_map[click_y, click_x] = LAST_CLICK_COLOR
+        if last_action==[2]:
+            rgb_map[click_y, click_x] = LAST_CLICK_COLOR
         
     beacon_ys, beacon_xs = s[1].nonzero()
     player_y, player_x = s[0].nonzero()
@@ -162,7 +164,8 @@ def plot_state(d, t, mask_queue=False):
     
     rgb_map[beacon_ys, beacon_xs] = BEACON_COLOR
     rgb_map[player_y, player_x] = PLAYER_COLOR
-    rgb_map[point_y, point_x] = CLICK_COLOR
+    if action == [2]:
+        rgb_map[point_y, point_x] = CLICK_COLOR
         
     plt.imshow(rgb_map)
     plt.xticks([])
@@ -496,8 +499,8 @@ def plot_map_at_step(agent, step_idx, PID, state, n_channels, res):
         #print('state.shape: ', state.shape)
         spatial_features = agent.AC.spatial_features_net(state)
         #print("spatial_features.shape: ", spatial_features.shape)
-        #screen_arg, screen_log_prob, screen_distr = agent.AC.sample_param(spatial_features, 'screen')
-        screen_arg, screen_log_prob, screen_distr = agent.AC.sample_param(state, 'screen')
+        screen_arg, screen_log_prob, screen_distr = agent.AC.sample_param(spatial_features, 'screen')
+        #screen_arg, screen_log_prob, screen_distr = agent.AC.sample_param(state, 'screen')
     N = screen_distr.shape[0]
     screen_distr = screen_distr.cpu().numpy().reshape(N, res, res)
     M = screen_distr.max()

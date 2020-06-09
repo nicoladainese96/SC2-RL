@@ -68,14 +68,14 @@ def inspection_step(agent, state, action_mask):
         step_dict['queue_distr'] = p
         #step_dict['queue_sel'] = q_arg
         # screen
-        screen_arg, screen_log_prob, screen_distr = agent.AC.sample_param(state, 'screen')
+        screen_arg, screen_log_prob, screen_distr = agent.AC.sample_param(spatial_features, 'screen')
         p = screen_distr.detach().cpu().numpy().reshape(state.shape[-2:]) 
         step_dict['spatial_distr'] = p
         #step_dict['spatial_sel'] = screen_arg
     ### End inspection ###
     log_prob = log_probs[range(len(a)), a]
     action_id = np.array([agent.AC.action_dict[act] for act in a])
-    args, args_log_prob, args_entropy = agent.get_arguments(state, nonspatial_features, a)
+    args, args_log_prob, args_entropy = agent.get_arguments(spatial_features, nonspatial_features, a)
     
     if move_only:
         if a[0] != 2:
@@ -90,11 +90,7 @@ def inspection_step(agent, state, action_mask):
 
 def inspection_update(agent, rewards, log_probs, entropies, states, done, bootstrap, trg_states): 
     old_states = torch.tensor(states).float().to(agent.device).reshape((-1,)+states.shape[2:])
-    V_trg = []
-    for n in range(1, agent.n_steps + 1):
-        n_step_V_trg = agent.compute_n_step_V_trg(n, rewards, done, bootstrap, states)
-        V_trg.append(n_step_V_trg)
-    V_trg = torch.mean(torch.stack(V_trg, axis=0), axis=0)
+    V_trg = agent.compute_n_step_V_trg(agent.n_steps, rewards, done, bootstrap, states)
     log_probs = torch.stack(log_probs).to(agent.device).transpose(1,0).reshape(-1)
     entropies = torch.stack(entropies, axis=0).to(agent.device).reshape(-1)
 
@@ -121,7 +117,6 @@ def inspect_actor_loss(agent, log_probs, entropies, old_states, V_trg):
     with torch.no_grad():
         V_pred = agent.AC.V_critic(old_states).squeeze()
         A = V_trg - V_pred
-        #A = (A - A.mean())/(A.std()+1e-5)
         policy_gradient = - log_probs*A
     A = A.cpu().numpy()
     pg = policy_gradient.cpu().numpy()
