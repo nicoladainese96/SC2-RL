@@ -424,7 +424,7 @@ def plot_value_map(agent, beacon_pos, n_channels, res):
     return
  
 def plot_value_map_at_step(agent, step_idx, PID, beacon_pos, n_channels, res):
-    agent.AC.load_state_dict(torch.load("Results/MoveToBeacon/Checkpoints/"+PID+"_"+str(step_idx)))
+    agent.AC.load_state_dict(torch.load("Results/MoveToBeacon/Checkpoints/"+PID+"_"+str(step_idx), map_location='cpu'))
     agent.AC.to(agent.device) 
     v_map = compute_value_map(agent, beacon_pos, n_channels, res)
     
@@ -492,7 +492,7 @@ def plot_decision_maps(agent, PID, init_step, step_jump, n_jumps, agent_pos_lst=
     
 def plot_map_at_step(agent, step_idx, PID, state, n_channels, res):
     
-    agent.AC.load_state_dict(torch.load("Results/MoveToBeacon/Checkpoints/"+PID+"_"+str(step_idx)))
+    agent.AC.load_state_dict(torch.load("Results/MoveToBeacon/Checkpoints/"+PID+"_"+str(step_idx), map_location='cpu'))
     agent.AC.to(agent.device) 
     
     with torch.no_grad():
