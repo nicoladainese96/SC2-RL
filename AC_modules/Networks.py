@@ -74,11 +74,11 @@ class FullyConvSpatial(nn.Module):
         return self.net(x)
     
 class FullyConvNonSpatial(nn.Module):
-    def __init__(self, n_features=256, n_channels=32, hidden_channels=64, resolution=16, stride=2):
+    def __init__(self, n_features=256, n_channels=32, hidden_channels=64, resolution=16, kernel_size=3, stride=2):
         super(FullyConvNonSpatial, self).__init__()
-        self.flatten_size = hidden_channels*((resolution-2)//stride)**2 # after conv 3x3 stride 2
+        self.flatten_size = hidden_channels*((resolution-kernel_size)//stride + 1)**2 # after conv 3x3, custom stride 
         self.conv = nn.Sequential(
-                                  nn.Conv2d(n_channels, hidden_channels, kernel_size=3, stride=stride),
+                                  nn.Conv2d(n_channels, hidden_channels, kernel_size=kernel_size, stride=stride),
                                   nn.ReLU()
                                  )
         

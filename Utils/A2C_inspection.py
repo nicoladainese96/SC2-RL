@@ -38,7 +38,7 @@ class InspectionDict():
             self.dict[k] = update_dict[k]
         return
     
-    def save_dict(self, path='Results/MoveToBeacon/Inspection/'):
+    def save_dict(self, path='../Results/MoveToBeacon/Inspection/'):
         np.save(path+self.PID+"_"+str(self.step_idx), self.dict)
         return
     

@@ -301,7 +301,7 @@ def train_batched_A2C(agent, game_params, lr, n_train_processes, max_train_steps
             score.append(avg_score)
             # save episode for inspection and model weights at that point
             inspector.save_dict()
-            torch.save(agent.AC.state_dict(), "Results/MoveToBeacon/Checkpoints/"+PID+"_"+str(step_idx))
+            torch.save(agent.AC.state_dict(), "../Results/MoveToBeacon/Checkpoints/"+PID+"_"+str(step_idx))
     envs.close()
     
     losses = dict(critic_losses=critic_losses, actor_losses=actor_losses, entropies=entropy_losses)
@@ -310,7 +310,7 @@ def train_batched_A2C(agent, game_params, lr, n_train_processes, max_train_steps
 def train_from_checkpoint(agent, game_params, lr, n_train_processes, max_train_steps, 
                       unroll_length, max_episode_steps, PID, step_idx, test_interval=100, num_tests=5):
     
-    agent.AC.load_state_dict(torch.load("Results/MoveToBeacon/Checkpoints/"+PID+"_"+str(step_idx)))
+    agent.AC.load_state_dict(torch.load("../Results/MoveToBeacon/Checkpoints/"+PID+"_"+str(step_idx)))
     agent.AC.to(agent.device) 
     
     replay_dict = dict(save_replay_episodes=num_tests,
@@ -372,7 +372,7 @@ def train_from_checkpoint(agent, game_params, lr, n_train_processes, max_train_s
             score.append(avg_score)
             # save episode for inspection and model weights at that point
             inspector.save_dict()
-            torch.save(agent.AC.state_dict(), "Results/MoveToBeacon/Checkpoints/"+PID+"_"+str(step_idx))
+            torch.save(agent.AC.state_dict(), "../Results/MoveToBeacon/Checkpoints/"+PID+"_"+str(step_idx))
     envs.close()
     
     losses = dict(critic_losses=critic_losses, actor_losses=actor_losses, entropies=entropy_losses)
