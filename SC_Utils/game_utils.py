@@ -1,4 +1,5 @@
 from pysc2.env import sc2_env
+from pysc2.lib import actions 
 import numpy as np
 
 def init_game(game_params, map_name='MoveToBeacon', max_steps=256, step_multiplier=8, **kwargs):
@@ -16,6 +17,11 @@ def init_game(game_params, map_name='MoveToBeacon', max_steps=256, step_multipli
 
     return env
 
+def get_action_dict(action_names):
+    action_ids = [actions.FUNCTIONS[a_name].id for a_name in action_names]
+    action_dict = {i:action_ids[i] for i in range(len(action_ids))}
+    return action_dict
+
 class ObsProcesser():
     def __init__(self, screen_names=[], minimap_names=[], select_all=False):
         
@@ -26,7 +32,7 @@ class ObsProcesser():
                             'player_id': (4,'ohe', 3), # 1,2,16
                             'player_relative': (5,'ohe', 3), # friendly (1), neutral (3), enemy (4)
                             'unit_type': (6,'ohe', 9), # dependent on the number of minigames considered and unit in them 
-                            'selected': (7,'float'), 
+                            'selected': (7,'ohe', 1),
                             'unit_hit_points': (8,'log'), 
                             'unit_hit_points_ratio': (9,'log'), 
                             'unit_energy': (10,'unknown'), 
@@ -92,6 +98,27 @@ class ObsProcesser():
         names = {'screen_names':screen_names, 'minimap_names':minimap_names}
         return state, names
     
+    def get_n_channels(self):
+        screen_channels, minimap_channels = 0, 0
+        
+        for name in self.screen_names:
+            if self.screen_var[name][1] == 'ohe':
+                screen_channels +=  self.screen_var[name][2]
+            elif (self.screen_var[name][1] == 'log') or (self.screen_var[name][1]=='float'):
+                screen_channels += 1
+            else:
+                raise Exception("Unknown number of channels of screen feature "+name)
+                
+        for name in self.minimap_names:
+            if self.minimap_var[name][1] == 'ohe':
+                minimap_channels +=  self.minimap_var[name][2]
+            elif (self.minimap_var[name][1] == 'log') or (self.minimap_var[name][1]=='float'):
+                minimap_channels += 1
+            else:
+                raise Exception("Unknown number of channels of minimap feature "+name)
+                
+        return screen_channels, minimap_channels
+        
     def _process_screen_features(self, feature_screen):
         names = list(feature_screen._index_names[0].keys())
         processed_layers = []
