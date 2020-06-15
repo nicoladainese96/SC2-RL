@@ -43,11 +43,14 @@ class SharedCritic(nn.Module):
     
 class SpatialActorCritic(nn.Module):
     def __init__(self, action_space, env, spatial_model, nonspatial_model, spatial_dict, nonspatial_dict, 
-                 n_features, n_channels):
+                 n_features, n_channels, action_dict=None):
         super(SpatialActorCritic, self).__init__()
         
         # Environment-related attributes
-        self.action_dict = {0:_NO_OP, 1:_SELECT_ARMY, 2:_MOVE_SCREEN}
+        if action_dict is None:
+            self.action_dict = {0:_NO_OP, 1:_SELECT_ARMY, 2:_MOVE_SCREEN}
+        else:
+            self.action_dict = action_dict
         self.screen_res = env.observation_spec()[0]['feature_screen'][1:]
         self.all_actions = env.action_spec()[0][1]
         self.all_arguments = env.action_spec()[0][0]
@@ -112,4 +115,41 @@ class SpatialActorCritic(nn.Module):
         nonspatial_features otherwise.
         """
         return self.arguments_networks[arg_name](state_rep)
- 
+
+class SpatialActorCritic_v1(SpatialActorCritic):
+    def __init__(self, action_space, env, spatial_model, nonspatial_model, spatial_dict, nonspatial_dict, 
+                 n_features, n_channels, action_dict=None, embed_dim=16):
+        self.embed_dim = embed_dim
+        super(SpatialActorCritic_v1, self).__init__(action_space, env, spatial_model, nonspatial_model,
+                                                 spatial_dict, nonspatial_dict, n_features, n_channels, action_dict)
+        self.embedding = nn.Embedding(action_space, embed_dim)
+    
+    def _init_params_nets(self):
+        arguments_networks = {}
+        self.arguments_dict = {}
+        self.arguments_type = {}
+        self.act_to_arg_names = {}
+        
+        for a in self.action_dict:
+            action = self.all_actions[self.action_dict[a]]
+            args = action.args
+            self.act_to_arg_names[a] = [arg.name for arg in args]
+            for arg in args:
+                self.arguments_dict[arg.name] = arg.id # store 'name':id pairs for future use
+                if debug: print('\narg.name: ', arg.name)
+
+                size = self.all_arguments[arg.id].sizes
+                if debug: print('size: ', size)
+                if len(size) == 1:
+                    if debug: 
+                        print("Init CategoricalNet for "+arg.name+' argument')
+                    arguments_networks[arg.name] = CategoricalNet(self.n_features+self.embed_dim, size[0]) 
+                    self.arguments_type[arg.name] = 'categorical'
+                else:
+                    if debug: print("Init SpatialNet for "+arg.name+' argument')
+                    arguments_networks[arg.name] = SpatialParameters(self.n_channels+self.embed_dim, size[0]) 
+                    self.arguments_type[arg.name] = 'spatial'
+                    
+        self.arguments_networks = nn.ModuleDict(arguments_networks)
+        
+        return

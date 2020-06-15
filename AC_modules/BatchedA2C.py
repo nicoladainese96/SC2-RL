@@ -1,40 +1,14 @@
 import numpy as np
-import itertools
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F 
 from torch.distributions import Categorical
-
 from AC_modules.ActorCriticArchitecture import *
-
 from pysc2.lib import actions
-from pysc2.lib import features
-
-# indexes of useful layers of the screen_features
-_PLAYER_RELATIVE = features.SCREEN_FEATURES.player_relative.index 
-_SELECTED = features.SCREEN_FEATURES.selected.index
-_UNIT_TYPE = features.SCREEN_FEATURES.unit_type.index
-
-# Identifiers in player_relative feature layer
-_BACKGROUND = 0
-_PLAYER_FRIENDLY = 1
-_PLAYER_ALLIES = 2
-_PLAYER_NEUTRAL = 3
-_PLAYER_HOSTILE = 4
-
-# Ids of the actions that we'll use
-_NO_OP = actions.FUNCTIONS.no_op.id
-_MOVE_SCREEN = actions.FUNCTIONS.Attack_screen.id
-_SELECT_ARMY = actions.FUNCTIONS.select_army.id
-
-# Meaning of some arguments required by the actions
-_SELECT_ALL = [0]
-_NOT_QUEUED = [0]
 
 debug = False
 
-class MoveToBeaconSpatialA2C():
+class SpatialA2C():
     """
     Advantage Actor-Critic RL agent restricted to MoveToBeacon StarCraftII minigame.
     
@@ -44,7 +18,7 @@ class MoveToBeaconSpatialA2C():
     """ 
     
     def __init__(self, action_space, env, spatial_model, nonspatial_model, spatial_dict, 
-                 nonspatial_dict, n_features, n_channels, gamma, H=1e-3, n_steps = 20, device='cpu'):
+                 nonspatial_dict, n_features, n_channels, gamma, action_dict=None, H=1e-3, n_steps=20, device='cpu'):
         """
         Parameters
         ----------
@@ -69,6 +43,10 @@ class MoveToBeaconSpatialA2C():
             and SpatialParameters networks
         gamma: float in [0,1]
             Discount factor
+        action_dict: dict (default None)
+            Dictionary associating to every action in the action space a SC2 action id.
+            If action_dict = None, it will be set by default to {0:0, 1:7, 2:12}, meaning
+            respectively no_op, select_army, attack_screen.
         H: float (default 1e-3)
             Entropy multiplicative factor in actor's loss
         n_steps: int (default 20)
@@ -82,7 +60,7 @@ class MoveToBeaconSpatialA2C():
         self.n_steps = n_steps
         self.H = H
         self.AC = SpatialActorCritic(action_space, env, spatial_model, nonspatial_model, spatial_dict, 
-                                     nonspatial_dict, n_features, n_channels)
+                                     nonspatial_dict, n_features, n_channels, action_dict=action_dict)
         self.device = device 
         self.AC.to(self.device) 
 
