@@ -26,7 +26,7 @@ class ObsProcesser():
     def __init__(self, screen_names=[], minimap_names=[], select_all=False):
         
         self.screen_var = { 'height_map': (0,'unknown'), 
-                            'visibility_map': (1,'ohe', 1), 
+                            'visibility_map': (1,'ohe', 2), 
                             'creep': (2,'unknown'), 
                             'power': (3,'unknown'), 
                             'player_id': (4,'ohe', 3), # 1,2,16
@@ -54,7 +54,7 @@ class ObsProcesser():
                             'placeholder': (26, 'unknown')}
         
         self.minimap_var = {'height_map': (0,'unknown'),
-                            'visibility_map': (1, 'ohe', 1),
+                            'visibility_map': (1, 'ohe', 2),
                             'creep': (2, 'unknown'), 
                             'camera': (3, 'ohe', 1), 
                             'player_id': (4, 'ohe', 3),
@@ -67,7 +67,7 @@ class ObsProcesser():
         
         # Contains specifics both for screen and minimap
         self.categorical_specs = {
-                                  'visibility_map':np.array([2]),
+                                  'visibility_map':np.array([1,2]),
                                   'player_id':np.array([1,2,16]),
                                   'player_relative':np.array([1,3,4]),
                                   'unit_type':np.array([9, 18, 48, 105, 110, 317, 341, 342, 1680]),

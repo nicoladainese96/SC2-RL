@@ -277,3 +277,230 @@ class SpatialA2C():
         Gamma_V = self.gamma**pw
         shifted_done = done[rows, cols].reshape(done.shape)
         return new_states, Gamma_V, shifted_done
+
+### Using separate networks for same parameter belonging to different actions ###
+class SpatialA2C_v2(SpatialA2C):
+    def __init__(self, action_space, env, spatial_model, nonspatial_model, 
+                 spatial_dict,  nonspatial_dict, n_features, n_channels,
+                 gamma, action_dict=None, H=1e-3, n_steps=20, device='cpu'):
+        # Do not use super().__init__()
+        self.gamma = gamma
+        self.n_actions = action_space
+        self.n_steps = n_steps
+        self.H = H
+        self.AC = SpatialActorCritic_v2(action_space, env, spatial_model, nonspatial_model, spatial_dict, 
+                                     nonspatial_dict, n_features, n_channels, action_dict)
+        self.device = device 
+        self.AC.to(self.device)
+        
+### Conditioning parameters on actions ###
+    
+class SpatialA2C_v1(SpatialA2C):
+    def __init__(self, action_space, env, spatial_model, nonspatial_model, 
+                 spatial_dict,  nonspatial_dict, n_features, n_channels, embed_dim,
+                 gamma, action_dict=None, H=1e-3, n_steps=20, device='cpu'):
+        # Do not use super().__init__()
+        self.gamma = gamma
+        self.n_actions = action_space
+        self.n_steps = n_steps
+        self.H = H
+        self.AC = SpatialActorCritic_v1(action_space, env, spatial_model, nonspatial_model, spatial_dict, 
+                                     nonspatial_dict, n_features, n_channels, action_dict, embed_dim)
+        self.device = device 
+        self.AC.to(self.device)
+        
+    def step(self, state, action_mask):
+        state = torch.from_numpy(state).float().to(self.device)
+        action_mask = torch.tensor(action_mask).to(self.device)
+        
+        log_probs, spatial_features, nonspatial_features = self.AC.pi(state, action_mask)
+        probs = torch.exp(log_probs)
+        entropy = self.compute_entropy(probs)
+        a = Categorical(probs).sample()
+        a = a.detach().cpu().numpy()
+        embedded_a = self._embed_action(a)
+        
+        log_prob = log_probs[range(len(a)), a]
+        
+        # Concatenate embedded action to spatial and nonspatial features
+        spatial_features = self._cat_action_to_spatial(embedded_a, spatial_features)
+        nonspatial_features = self._cat_action_to_nonspatial(embedded_a, nonspatial_features)
+        
+        args, args_log_prob, args_entropy = self.get_arguments(spatial_features, nonspatial_features, a)
+        log_prob = log_prob + args_log_prob
+        entropy = entropy + args_entropy
+
+        action_id = np.array([self.AC.action_dict[act] for act in a])
+        action = [actions.FunctionCall(action_id[i], args[i]) for i in range(len(action_id))]
+
+        return action, log_prob, torch.mean(entropy)
+
+    def get_arguments(self, spatial_features, nonspatial_features, action):
+        """
+        Samples all possible arguments for each sample in the batch, then selects only those that
+        apply to the selected actions and returns a list containing the list of arguments for every 
+        sampled action, the logarithm of the probability of sampling those arguments and the entropy 
+        of their distributions. If an action has more arguments the log probs and the entropies returned
+        are the sum of all those of the single arguments.
+        """
+        ### Sample and store each argument with its log prob and entropy ###
+        results = {}    
+        for arg_name in self.AC.arguments_dict.keys():
+            if self.AC.arguments_type[arg_name] == 'categorical':
+                arg_sampled, log_prob, probs = self.AC.sample_param(nonspatial_features, arg_name)
+            elif self.AC.arguments_type[arg_name] == 'spatial':
+                arg_sampled, log_prob, probs = self.AC.sample_param(spatial_features, arg_name)
+            else:
+                raise Exception("argument type for "+arg_name+" not understood")  
+            entropy = self.compute_entropy(probs)
+            results[arg_name] = (arg_sampled, log_prob, entropy)
+           
+        ### For every action get the list of arguments and their log prob and entropy ###
+        args, args_log_prob, args_entropy = [], [], []
+        for i, a in enumerate(action):
+            # default return values if no argument is sampled (like if there was a single value obtained with p=1)
+            arg = []
+            arg_log_prob = torch.tensor([0]).float().to(self.device)
+            entropies = torch.tensor([0]).float().to(self.device)
+            
+            arg_names = self.AC.act_to_arg_names[a]
+            values = list( map(results.get, arg_names) )
+            if len(values) != 0:
+                for j in range(len(values)):
+                    # j is looping on the tuples (arg, log_prob, ent)
+                    # Second index is for accessing tuples items
+                    # i is for the sample index inside the batch
+                    arg.append(list(values[j][0][i]))
+                    arg_log_prob = arg_log_prob + values[j][1][i] # sum log_probs
+                    entropies = entropies + values[j][2][i] # sum entropies
+            args.append(arg)
+            args_log_prob.append(arg_log_prob) 
+            args_entropy.append(entropies)
+            
+        args_log_prob = torch.stack(args_log_prob, axis=0).squeeze()
+        args_entropy = torch.stack(args_entropy, axis=0).squeeze()
+        return args, args_log_prob, args_entropy
+    
+    def _embed_action(self, action):
+        a = torch.LongTensor(action).to(self.device)
+        a = self.AC.embedding(a)
+        return a
+    
+    def _cat_action_to_spatial(self, embedded_action, spatial_repr):
+        """ 
+        Assume spatial_repr of shape (B, n_channels, res, res).
+        Cast embedded_action from (B, embedd_dim) to (B, embedd_dim, res, res)
+        Concatenate spatial_repr with the broadcasted embedded action along the channel dim.
+        """
+        res = spatial_repr.shape[-1]
+        embedded_action = embedded_action.reshape((embedded_action.shape[:2]+(1,1,)))
+        spatial_a = embedded_action.repeat(1,1,res,res)
+        spatial_repr = torch.cat([spatial_repr, spatial_a], dim=1)
+        return spatial_repr
+    
+    def _cat_action_to_nonspatial(self, embedded_action, nonspatial_repr):
+        """
+        nonspatial_repr: (B, n_features)
+        embedded_action: (B, embedd_dim)
+        Concatenate them so that the result is of shape (B, n_features+embedd_dim)
+        """
+        return torch.cat([nonspatial_repr, embedded_action], dim=1)
+    
+# works similarly to v1 for the categorical parameters, but is different for the spatial ones
+class SpatialA2C_v3(SpatialA2C):
+    def __init__(self, action_space, env, spatial_model, nonspatial_model, 
+                 spatial_dict,  nonspatial_dict, n_features, n_channels,
+                 gamma, action_dict=None, H=1e-3, n_steps=20, device='cpu'):
+        # Do not use super().__init__()
+        self.gamma = gamma
+        self.n_actions = action_space
+        self.n_steps = n_steps
+        self.H = H
+        self.AC = SpatialActorCritic_v3(action_space, env, spatial_model, nonspatial_model, spatial_dict, 
+                                     nonspatial_dict, n_features, n_channels, action_dict)
+        self.device = device 
+        self.AC.to(self.device)
+        
+    def step(self, state, action_mask):
+        state = torch.from_numpy(state).float().to(self.device)
+        action_mask = torch.tensor(action_mask).to(self.device)
+        
+        log_probs, spatial_features, nonspatial_features = self.AC.pi(state, action_mask)
+        probs = torch.exp(log_probs)
+        entropy = self.compute_entropy(probs)
+        a = Categorical(probs).sample()
+        a = a.detach().cpu().numpy()
+        embedded_a = self._embed_action(a)
+        
+        log_prob = log_probs[range(len(a)), a]
+        
+        # Concatenate embedded action to nonspatial features only
+        nonspatial_features = self._cat_action_to_nonspatial(embedded_a, nonspatial_features)
+        
+        args, args_log_prob, args_entropy = self.get_arguments(spatial_features, nonspatial_features, a, embedded_a)
+        log_prob = log_prob + args_log_prob
+        entropy = entropy + args_entropy
+
+        action_id = np.array([self.AC.action_dict[act] for act in a])
+        action = [actions.FunctionCall(action_id[i], args[i]) for i in range(len(action_id))]
+
+        return action, log_prob, torch.mean(entropy)
+
+    def get_arguments(self, spatial_features, nonspatial_features, action, embedded_a):
+        """
+        Samples all possible arguments for each sample in the batch, then selects only those that
+        apply to the selected actions and returns a list containing the list of arguments for every 
+        sampled action, the logarithm of the probability of sampling those arguments and the entropy 
+        of their distributions. If an action has more arguments the log probs and the entropies returned
+        are the sum of all those of the single arguments.
+        """
+        ### Sample and store each argument with its log prob and entropy ###
+        results = {}    
+        for arg_name in self.AC.arguments_dict.keys():
+            if self.AC.arguments_type[arg_name] == 'categorical':
+                arg_sampled, log_prob, probs = self.AC.sample_param(arg_name, nonspatial_features)
+            elif self.AC.arguments_type[arg_name] == 'spatial':
+                arg_sampled, log_prob, probs = self.AC.sample_param(arg_name, spatial_features, embedded_a)
+            else:
+                raise Exception("argument type for "+arg_name+" not understood")  
+            entropy = self.compute_entropy(probs)
+            results[arg_name] = (arg_sampled, log_prob, entropy)
+           
+        ### For every action get the list of arguments and their log prob and entropy ###
+        args, args_log_prob, args_entropy = [], [], []
+        for i, a in enumerate(action):
+            # default return values if no argument is sampled (like if there was a single value obtained with p=1)
+            arg = []
+            arg_log_prob = torch.tensor([0]).float().to(self.device)
+            entropies = torch.tensor([0]).float().to(self.device)
+            
+            arg_names = self.AC.act_to_arg_names[a]
+            values = list( map(results.get, arg_names) )
+            if len(values) != 0:
+                for j in range(len(values)):
+                    # j is looping on the tuples (arg, log_prob, ent)
+                    # Second index is for accessing tuples items
+                    # i is for the sample index inside the batch
+                    arg.append(list(values[j][0][i]))
+                    arg_log_prob = arg_log_prob + values[j][1][i] # sum log_probs
+                    entropies = entropies + values[j][2][i] # sum entropies
+            args.append(arg)
+            args_log_prob.append(arg_log_prob) 
+            args_entropy.append(entropies)
+            
+        args_log_prob = torch.stack(args_log_prob, axis=0).squeeze()
+        args_entropy = torch.stack(args_entropy, axis=0).squeeze()
+        return args, args_log_prob, args_entropy
+    
+    def _embed_action(self, action):
+        a = torch.LongTensor(action).to(self.device)
+        a = self.AC.embedding(a)
+        return a
+    
+    def _cat_action_to_nonspatial(self, embedded_action, nonspatial_repr):
+        """
+        nonspatial_repr: (B, n_features)
+        embedded_action: (B, embedd_dim)
+        Concatenate them so that the result is of shape (B, n_features+embedd_dim)
+        """
+        return torch.cat([nonspatial_repr, embedded_action], dim=1)
