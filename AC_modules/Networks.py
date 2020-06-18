@@ -215,7 +215,7 @@ def unravel_index(index, shape):
 
 class SpatialParameters(nn.Module):
     
-    def __init__(self, n_channels, linear_size, in_channels=2):
+    def __init__(self, n_channels, linear_size):
         super(SpatialParameters, self).__init__()
         
         self.size = linear_size
@@ -225,6 +225,28 @@ class SpatialParameters(nn.Module):
         B = x.shape[0]
         x = self.conv(x)
         x = x.reshape((x.shape[0],-1))
+        log_probs = F.log_softmax(x, dim=(-1))
+        probs = torch.exp(log_probs)
+        index = Categorical(probs).sample()
+        y, x = unravel_index(index, (self.size,self.size))
+        if x_first:
+            arg_lst = [[xi.item(),yi.item()] for xi, yi in zip(x,y)]
+        else:
+            arg_lst = [[yi.item(),xi.item()] for xi, yi in zip(x,y)]
+        log_prob = log_probs[torch.arange(B), index]
+        return arg_lst, log_prob, probs
+    
+class ConditionedSpatialParameters(nn.Module):
+    
+    def __init__(self, linear_size):
+        super(ConditionedSpatialParameters, self).__init__()
+        
+        self.size = linear_size
+    
+    def forward(self, x, embedded_a, x_first=True):
+        B = x.shape[0]
+        x = torch.einsum('bc, bcwh -> bwh', embedded_a, x)
+        x = x.reshape((B,-1))
         log_probs = F.log_softmax(x, dim=(-1))
         probs = torch.exp(log_probs)
         index = Categorical(probs).sample()

@@ -10,13 +10,13 @@ import copy
 import sys
 sys.path.insert(0, "../")
 from SC_Utils.game_utils import ObsProcesser
-from Utils.A2C_inspection import *
+from SC_Utils.A2C_inspection import *
 
 from pysc2.env import sc2_env
 #from pysc2.lib import features
 
 debug=False
-inspection=False
+inspection=True
 
 def gen_PID():
     ID = ''.join([random.choice(string.ascii_letters) for _ in range(4)])
@@ -43,9 +43,9 @@ def merge_screen_and_minimap(state_dict):
         state = screen
     else:
         raise Exception("Both screen and minimap seem to have 0 layers.")
-    return state
-              
-def init_game(game_params, map_name='MoveToBeacon', max_steps=256, step_multiplier=8, **kwargs):
+    return state              
+
+def init_game(game_params, map_name='MoveToBeacon', step_multiplier=8, **kwargs):
 
     race = sc2_env.Race(1) # 1 = terran
     agent = sc2_env.Agent(race, "Testv0") # NamedTuple [race, agent_name]
@@ -53,17 +53,18 @@ def init_game(game_params, map_name='MoveToBeacon', max_steps=256, step_multipli
 
     game_params = dict(map_name=map_name, 
                        players=[agent], # use a list even for single player
-                       game_steps_per_episode = max_steps*step_multiplier,
+                       game_steps_per_episode = 0,
+                       step_mul = step_multiplier,
                        agent_interface_format=[agent_interface_format] # use a list even for single player
                        )  
     env = sc2_env.SC2Env(**game_params, **kwargs)
 
     return env
 
-def worker(worker_id, master_end, worker_end, game_params, map_name, max_steps, obs_proc_params, action_dict):
+def worker(worker_id, master_end, worker_end, game_params, map_name, obs_proc_params, action_dict):
     master_end.close()  # Forbid worker to use the master end for messaging
     np.random.seed() # sets random seed for the environment
-    env = init_game(game_params, map_name, max_steps, random_seed=np.random.randint(10000))
+    env = init_game(game_params, map_name, random_seed=np.random.randint(10000))
     op = ObsProcesser(**obs_proc_params)
     
     while True:
@@ -74,8 +75,6 @@ def worker(worker_id, master_end, worker_end, game_params, map_name, max_steps, 
             state_trg = merge_screen_and_minimap(state_trg_dict)
             reward = obs[0].reward
             done = obs[0].last()
-            available_actions = obs[0].observation.available_actions
-            action_mask = get_action_mask(available_actions, action_dict)
             
             # Always bootstrap when episode finishes (in MoveToBeacon there is no real end)
             if done:
@@ -83,8 +82,8 @@ def worker(worker_id, master_end, worker_end, game_params, map_name, max_steps, 
             else:
                 bootstrap = False
                 
-            # ob_trg is the state used as next state for the update
-            # ob is the new state used to decide the next action 
+            # state_trg is the state used as next state for the update
+            # state is the new state used to decide the next action 
             # (different if the episode ends and another one begins)
             if done:
                 obs = env.reset()
@@ -93,6 +92,8 @@ def worker(worker_id, master_end, worker_end, game_params, map_name, max_steps, 
             else:
                 state = state_trg
                 
+            available_actions = obs[0].observation.available_actions
+            action_mask = get_action_mask(available_actions, action_dict)
             worker_end.send((state, reward, done, bootstrap, state_trg, action_mask))
             
         elif cmd == 'reset':
@@ -110,7 +111,7 @@ def worker(worker_id, master_end, worker_end, game_params, map_name, max_steps, 
             raise NotImplementedError
 
 class ParallelEnv:
-    def __init__(self, n_train_processes, game_params, map_name, max_steps, obs_proc_params, action_dict):
+    def __init__(self, n_train_processes, game_params, map_name, obs_proc_params, action_dict):
         self.nenvs = n_train_processes
         self.waiting = False
         self.closed = False
@@ -122,7 +123,7 @@ class ParallelEnv:
         for worker_id, (master_end, worker_end) in enumerate(zip(master_ends, worker_ends)):
             p = mp.Process(target=worker,
                            args=(worker_id, master_end, worker_end, game_params, 
-                                 map_name, max_steps, obs_proc_params, action_dict))
+                                 map_name, obs_proc_params, action_dict))
             p.daemon = True
             p.start()
             self.workers.append(p)
@@ -165,15 +166,15 @@ class ParallelEnv:
             self.closed = True
             
 def train_batched_A2C(agent, game_params, map_name, lr, n_train_processes, max_train_steps, 
-                      unroll_length, max_episode_steps, obs_proc_params, action_dict,
-                      test_interval=100, num_tests=5):
+                      unroll_length, obs_proc_params, action_dict,
+                      test_interval=100, num_tests=5, inspection_interval=200):
     
     replay_dict = dict(save_replay_episodes=num_tests,
                        replay_dir='Replays/',
                        replay_prefix='A2C_'+map_name)
-    test_env = init_game(game_params, map_name, max_episode_steps, **replay_dict) # save just test episodes
+    test_env = init_game(game_params, map_name, **replay_dict) # save just test episodes
     op = ObsProcesser(**obs_proc_params)
-    envs = ParallelEnv(n_train_processes, game_params, map_name, max_episode_steps, obs_proc_params, action_dict)
+    envs = ParallelEnv(n_train_processes, game_params, map_name, obs_proc_params, action_dict)
 
     optimizer = torch.optim.Adam(agent.AC.parameters(), lr=lr)
     PID = gen_PID()
@@ -184,11 +185,11 @@ def train_batched_A2C(agent, game_params, map_name, lr, n_train_processes, max_t
     entropy_losses = []
     
     step_idx = 0
+    s, a_mask = envs.reset() # reset manually only at the beginning
     while step_idx < max_train_steps:
         s_lst, r_lst, done_lst, bootstrap_lst, s_trg_lst = list(), list(), list(), list(), list()
         log_probs = []
         entropies = []
-        s, a_mask = envs.reset()
         for _ in range(unroll_length):
 
             a, log_prob, entropy = agent.step(s, a_mask)
@@ -229,13 +230,13 @@ def train_batched_A2C(agent, game_params, map_name, lr, n_train_processes, max_t
         
         ### Test time ###
         if step_idx % test_interval == 0:
-            if inspection:
-                avg_score, inspector = test(step_idx, agent, test_env, PID, op, action_dict, num_tests)
+            avg_score = test(step_idx, agent, test_env, PID, op, action_dict, num_tests)
+            if inspection and (step_idx%inspection_interval==0):
+                inspector = inspection_test(step_idx, agent, test_env, PID, op, action_dict)
                 # save episode for inspection and model weights at that point
-                inspector.save_dict()
-                torch.save(agent.AC.state_dict(), "../Results/MoveToBeacon/Checkpoints/"+PID+"_"+str(step_idx))
-            else:
-                avg_score = test(step_idx, agent, test_env, PID, op, action_dict, num_tests)
+                save_path = "../Results/"+map_name+"/Checkpoints/"
+                inspector.save_dict(path=save_path)
+                torch.save(agent.AC.state_dict(), save_path+PID+"_"+str(step_idx))
             score.append(avg_score)
     envs.close()
     
@@ -245,14 +246,8 @@ def train_batched_A2C(agent, game_params, map_name, lr, n_train_processes, max_t
 def test(step_idx, agent, test_env, process_ID, op, action_dict, num_test=5):
     score = 0.0
     done = False
-    
-    ### Standard tests ###
-    if inspection:
-        standard_tests = num_test-1
-    else:
-        standard_tests = num_test
-        
-    for _ in range(standard_tests):
+            
+    for _ in range(num_test):
         
         obs = test_env.reset()
         s_dict, _ = op.get_state(obs)
@@ -276,28 +271,18 @@ def test(step_idx, agent, test_env, process_ID, op, action_dict, num_test=5):
             score += reward
         done = False
         
-    ### Inspection test ###
-    if inspection:
-        G, inspector = inspection_test(step_idx, agent, test_env, process_ID, action_dict)
-        score += G
     print(f"Step # : {step_idx}, avg score : {score/num_test:.1f}")
-    if inspection:
-        return score/num_test, inspector
-    else:
-        return score/num_test
+    return score/num_test
 
-def inspection_test(step_idx, agent, test_env, process_ID, action_dict):
-    raise Exception("Still to update")
-    inspector = InspectionDict(step_idx, process_ID)
+def inspection_test(step_idx, agent, test_env, process_ID, op, action_dict):
+    inspector = InspectionDict(step_idx, process_ID, action_dict, test_env)
     
     obs = test_env.reset()
-    s = get_ohe_state(obs)[np.newaxis, ...] # add batch dim
-    
+    s_dict, _ = op.get_state(obs)
+    s = merge_screen_and_minimap(s_dict)
+    s = s[np.newaxis, ...] # add batch dim
     available_actions = obs[0].observation.available_actions
-    if simplified:
-        a_mask = select_army_mask()[np.newaxis, ...] # add batch dim
-    else:
-        a_mask = get_action_mask(available_actions)[np.newaxis, ...] # add batch dim
+    a_mask = get_action_mask(available_actions, action_dict)[np.newaxis, ...] # add batch dim
     
     done = False
     G = 0.0
@@ -306,19 +291,17 @@ def inspection_test(step_idx, agent, test_env, process_ID, action_dict):
     log_probs = []
     entropies = []
     while not done:
-        a, log_prob, entropy, step_dict = inspection_step(agent, s, a_mask)
-        inspector.store_step(step_dict)
+        a, log_prob, entropy = inspection_step(agent, inspector, s, a_mask)
         log_probs.append(log_prob)
         entropies.append(entropy)
         obs = test_env.step(a)
-        s_prime = get_ohe_state(obs)[np.newaxis, ...] # add batch dim
+        s_prime_dict, _ = op.get_state(obs) 
+        s_prime = merge_screen_and_minimap(s_prime_dict)
+        s_prime = s_prime[np.newaxis, ...] # add batch dim
         reward = obs[0].reward
         done = obs[0].last()
         available_actions = obs[0].observation.available_actions
-        if simplified:
-            a_mask = move_screen_mask()[np.newaxis, ...] # add batch dim
-        else:
-            a_mask = get_action_mask(available_actions)[np.newaxis, ...] # add batch dim
+        a_mask = get_action_mask(available_actions, action_dict)[np.newaxis, ...] # add batch dim
         if done:
             bootstrap = True
         else:
@@ -343,4 +326,4 @@ def inspection_test(step_idx, agent, test_env, process_ID, action_dict):
     update_dict = inspection_update(agent, r_lst, log_probs, entropies, s_lst, 
                                     done_lst, bootstrap_lst, s_trg_lst)
     inspector.store_update(update_dict)
-    return G, inspector
+    return inspector
