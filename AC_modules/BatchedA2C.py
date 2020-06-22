@@ -18,7 +18,7 @@ class SpatialA2C():
     """ 
     
     def __init__(self, action_space, env, spatial_model, nonspatial_model, spatial_dict, 
-                 nonspatial_dict, n_features, n_channels, gamma, action_dict=None, H=1e-3, n_steps=20, device='cpu'):
+                 nonspatial_dict, n_features, n_channels, gamma=0.99, action_dict=None, H=1e-3, n_steps=20, device='cpu'):
         """
         Parameters
         ----------
@@ -282,7 +282,7 @@ class SpatialA2C():
 class SpatialA2C_v2(SpatialA2C):
     def __init__(self, action_space, env, spatial_model, nonspatial_model, 
                  spatial_dict,  nonspatial_dict, n_features, n_channels,
-                 gamma, action_dict=None, H=1e-3, n_steps=20, device='cpu'):
+                 gamma=0.99, action_dict=None, H=1e-3, n_steps=20, device='cpu'):
         # Do not use super().__init__()
         self.gamma = gamma
         self.n_actions = action_space
@@ -298,7 +298,7 @@ class SpatialA2C_v2(SpatialA2C):
 class SpatialA2C_v1(SpatialA2C):
     def __init__(self, action_space, env, spatial_model, nonspatial_model, 
                  spatial_dict,  nonspatial_dict, n_features, n_channels, embed_dim,
-                 gamma, action_dict=None, H=1e-3, n_steps=20, device='cpu'):
+                 gamma=0.99, action_dict=None, H=1e-3, n_steps=20, device='cpu'):
         # Do not use super().__init__()
         self.gamma = gamma
         self.n_actions = action_space
@@ -410,7 +410,7 @@ class SpatialA2C_v1(SpatialA2C):
 class SpatialA2C_v3(SpatialA2C):
     def __init__(self, action_space, env, spatial_model, nonspatial_model, 
                  spatial_dict,  nonspatial_dict, n_features, n_channels,
-                 gamma, action_dict=None, H=1e-3, n_steps=20, device='cpu'):
+                 gamma=0.99, action_dict=None, H=1e-3, n_steps=20, device='cpu'):
         # Do not use super().__init__()
         self.gamma = gamma
         self.n_actions = action_space

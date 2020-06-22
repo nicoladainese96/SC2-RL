@@ -7,13 +7,13 @@ import string
 import random
 import copy
 
+import os
 import sys
 sys.path.insert(0, "../")
 from SC_Utils.game_utils import ObsProcesser
 from SC_Utils.A2C_inspection import *
 
 from pysc2.env import sc2_env
-#from pysc2.lib import features
 
 debug=False
 inspection=True
@@ -167,8 +167,9 @@ class ParallelEnv:
             
 def train_batched_A2C(agent, game_params, map_name, lr, n_train_processes, max_train_steps, 
                       unroll_length, obs_proc_params, action_dict,
-                      test_interval=100, num_tests=5, inspection_interval=200):
-    
+                      test_interval=100, num_tests=5, inspection_interval=120000, save_path=None):
+    if save_path is None:
+        save_path = "../Results/"+map_name
     replay_dict = dict(save_replay_episodes=num_tests,
                        replay_dir='Replays/',
                        replay_prefix='A2C_'+map_name)
@@ -230,20 +231,26 @@ def train_batched_A2C(agent, game_params, map_name, lr, n_train_processes, max_t
         
         ### Test time ###
         if step_idx % test_interval == 0:
-            avg_score = test(step_idx, agent, test_env, PID, op, action_dict, num_tests)
+            if step_idx // test_interval == 1:
+                os.system('mkdir '+save_path+'/Logging/')
+                with open(save_path+'/Logging/'+PID+'.txt', 'a+') as f:
+                    print("#Steps,score", file=f)
+            avg_score = test(step_idx, agent, test_env, PID, op, action_dict, num_tests, save_path)
             if inspection and (step_idx%inspection_interval==0):
                 inspector = inspection_test(step_idx, agent, test_env, PID, op, action_dict)
                 # save episode for inspection and model weights at that point
-                save_path = "../Results/"+map_name+"/Checkpoints/"
-                inspector.save_dict(path=save_path)
-                torch.save(agent.AC.state_dict(), save_path+PID+"_"+str(step_idx))
+                os.system('mkdir '+save_path)
+                os.system('mkdir '+save_path+'/Inspection/')
+                os.system('mkdir '+save_path+'/Checkpoints/')
+                inspector.save_dict(path=save_path+'/Inspection/')
+                torch.save(agent.AC.state_dict(), save_path+'/Checkpoints/'+PID+'_'+str(step_idx))
             score.append(avg_score)
     envs.close()
     
     losses = dict(critic_losses=critic_losses, actor_losses=actor_losses, entropies=entropy_losses)
     return score, losses, agent, PID
 
-def test(step_idx, agent, test_env, process_ID, op, action_dict, num_test=5):
+def test(step_idx, agent, test_env, process_ID, op, action_dict, num_test, save_path):
     score = 0.0
     done = False
             
@@ -270,8 +277,9 @@ def test(step_idx, agent, test_env, process_ID, op, action_dict, num_test=5):
             s = s_prime
             score += reward
         done = False
-        
-    print(f"Step # : {step_idx}, avg score : {score/num_test:.1f}")
+
+    with open(save_path+'/Logging/'+process_ID+'.txt', 'a+') as f:
+        print(f"{step_idx},{score/num_test:.1f}", file=f)
     return score/num_test
 
 def inspection_test(step_idx, agent, test_env, process_ID, op, action_dict):

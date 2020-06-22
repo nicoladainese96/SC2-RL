@@ -11,7 +11,7 @@ _NO_OP = actions.FUNCTIONS.no_op.id
 _SELECT_ARMY = actions.FUNCTIONS.select_army.id
 _MOVE_SCREEN = actions.FUNCTIONS.Attack_screen.id
 
-debug = True
+debug = False
 
 ### Shared ActorCritic architecture
 
