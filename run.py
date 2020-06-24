@@ -102,6 +102,11 @@ def main():
                       test_interval = args.test_interval
                       )
 
+    # Creating paths if not existing
+    if not os.path.isdir(args.save_dir):
+        os.system("mkdir "+args.save_dir)
+    if not os.path.isdir(args.save_dir+map_name):
+        os.system("mkdir "+args.save_dir+map_name)
     # Actual training
     results = train_batched_A2C(agent, game_params, map_name, args.lr, 
                             obs_proc_params=obs_proc_params, action_dict=action_dict,
