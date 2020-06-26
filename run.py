@@ -14,13 +14,13 @@ parser = argparse.ArgumentParser(description='A2C for StarCraftII minigames')
 parser.add_argument('--res', type=int, help='Screen and minimap resolution', default=32)
 parser.add_argument('--map_name', type=str, help='Name of the minigame', default='MoveToBeacon')
 parser.add_argument('--select_all_layers', type=bool, help='If True, selects all useful layers of screen and minimap', default=True)
-parser.add_argument('--screen_names', type=list, help='List of strings containing screen layers names to use. \
+parser.add_argument('--screen_names', type=str, nargs='*', help='List of strings containing screen layers names to use. \
                     Overridden by select_all_layers=True', 
                     default=['visibility_map', 'player_relative', 'selected', 'unit_density', 'unit_density_aa'])
-parser.add_argument('--minimap_names', type=list, help='List of strings containing minimap layers names to use. \
+parser.add_argument('--minimap_names', type=str, nargs='*', help='List of strings containing minimap layers names to use. \
                     Overridden by select_all_layers=True', 
                     default=['visibility_map', 'camera'])
-parser.add_argument('--action_names', type=list, help='List of strings containing action names to use.', 
+parser.add_argument('--action_names', '-a_n', type=str, nargs='*', help='List of strings containing action names to use.', 
                     default=['select_army', 'Attack_screen', 'Move_screen', 'select_point', 'select_rect',
                 'move_camera','Stop_quick','Move_minimap','Attack_minimap','HoldPosition_quick'])
 # Agent arguments
@@ -63,6 +63,7 @@ def main():
     screen_channels, minimap_channels = op.get_n_channels()
     in_channels = screen_channels + minimap_channels 
     action_dict = get_action_dict(args.action_names)
+    print(action_dict)
     action_space = len(action_dict)
     
     # A2C params
