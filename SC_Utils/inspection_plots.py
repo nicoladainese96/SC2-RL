@@ -1,8 +1,10 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
+import matplotlib.gridspec as gridspec
+import math
 import torch
-from SC_Utils.render import plot_screen
+from SC_Utils.render import plot_screen, plot_minimap
 
 ### Scalar variable plots ###
 def plot_rewards(rewards):
@@ -109,35 +111,97 @@ def print_action_info(inspector, d, t):
     print("-"*35)
     print("Action chosen: ", inspector.action_dict[d['action_sel'][t][0]].name)
     
-def plot_state(d, layer_names, t):
+def plot_state(inspector, d, layer_names, t):
     current_state = d['state_traj'][t][0]
     click = None
-    args = d['args'][t][0]
-    for arg in args:
-        if len(arg) > 1:
-            click = arg
-            break
-        
-    last_click = None
-    if t > 0:
-        args = d['args'][t-1][0]
+    # get all arguments' names that the action selected requires
+    a = d['action_sel'][0][0]
+    a_name = inspector.action_dict[a].name
+    #print("action name: ", a_name)
+    arg_names = [arg_name for arg_name in list(d.keys()) if a_name in arg_name]
+    #print("arguments names: ", arg_names)
+    # check if any of those arguments is screen_distr (at most 1)
+    screen_args = [arg_name for arg_name in arg_names if "screen_distr" in arg_name]
+    #print("screen_args ", screen_args)
+    if len(screen_args)==1:
+        args = d['args'][t][0]
+        # this assumes that screen is the first spatial argument, true but risky
         for arg in args:
             if len(arg) > 1:
-                last_click = arg
+                click = arg
                 break
-    print("Click: ", click)
-    print("Last click: ", last_click)
-    if t > 0:
-        last_state = d['state_traj'][t-1][0]
-        plot_screen(current_state, layer_names, last_state, click, last_click)
-    else:
-        plot_screen(current_state, layer_names, click=click)
+
+    last_click = None
+    # FIXME
+    #if t > 0:
+    #    args = d['args'][t-1][0]
+    #    for arg in args:
+    #        if len(arg) > 1:
+    #            last_click = arg
+    #            break
+    #print("Click: ", click)
+    #print("Last click: ", last_click)
+    # FIXME
+    #if t > 0:
+    #    last_state = d['state_traj'][t-1][0]
+    #    plot_screen(current_state, layer_names, last_state, click, last_click)
+    #else:
+    plot_screen(current_state, layer_names, click=click)
+    
+def plot_minimap_state(inspector, d, layer_names, t):
+    
+    current_state = d['state_traj'][t][0]
+    click = None
+    # get all arguments' names that the action selected requires
+    a = d['action_sel'][0][0]
+    a_name = inspector.action_dict[a].name
+    #print("action name: ", a_name)
+    arg_names = [arg_name for arg_name in list(d.keys()) if a_name in arg_name]
+    #print("arguments names: ", arg_names)
+    # check if any of those arguments is minimap_distr (at most 1)
+    minimap_args = [arg_name for arg_name in arg_names if "minimap_distr" in arg_name]
+    #print("minimap_args ", minimap_args)
+    if len(minimap_args)==1:
+        args = d['args'][t][0]
+        # this assumes that minimap is the first spatial argument, true but risky
+        for arg in args:
+            if len(arg) > 1:
+                click = arg
+                break
+
+        
+    last_click = None
+    # FIXME
+    #if t > 0:
+    #    args = d['args'][t-1][0]
+    #    for arg in args:
+    #        if len(arg) > 1:
+    #            last_click = arg
+    #            break
+    #print("Click: ", click)
+    #print("Last click: ", last_click)
+    # FIXME
+    #if t > 0:
+    #    last_state = d['state_traj'][t-1][0]
+    #    plot_screen(current_state, layer_names, last_state, click, last_click)
+    #else:
+    plot_minimap(current_state, layer_names, click=click)
         
 def plot_screen_distr(d, t, alpha=0.7):
-    probs = d['screen_distr'][t]
-    #neutral_idx = np.where(layer_names == 'player_relative_3')[0]
-    #neutral_layer = d['state_traj'][t][0][neutral_idx]
-    _plot_screen_distr(probs, alpha)
+    spatial_args = get_spatial_args(d)
+    num_spatial_args = len(spatial_args)
+    grid = (2, math.ceil(num_spatial_args/2))
+    gs1 = gridspec.GridSpec(*grid)
+    #gs1.update(wspace=0, hspace=0)
+
+    for i in range(num_spatial_args):
+        ax1 = plt.subplot(gs1[i])
+        ax1.set_title(spatial_args[i])
+        probs = d[spatial_args[i]][t]
+        _plot_screen_distr(probs)
+        plt.axis('on')
+
+    plt.tight_layout()
     
 def _plot_screen_distr(probs, alpha=0.7):
     M = probs.max()
@@ -159,19 +223,33 @@ def _plot_screen_distr(probs, alpha=0.7):
     pmean = 0.5*(M-m)+m
     cbar.ax.set_yticklabels(["{:0.4f}".format(pmin), "{:0.4f}".format(pmean), "{:0.4f}".format(pmax)])
     
-def plot_screen_and_decision(d, layer_names, t):
+def plot_screen_and_decision(inspector, d, layer_names, t, show_minimap=True):
+    if show_minimap:
+        fig = plt.figure(figsize=(14,6))
+        plt.subplot(121)
+        plot_state(inspector, d, layer_names, t)
+        plt.subplot(122)
+        plot_minimap_state(inspector, d, layer_names, t)
+    else:
+        fig = plt.figure(figsize=(8,6))
+        plot_state(inspector, d, layer_names, t)
+    plt.show()
+    
     fig = plt.figure(figsize=(14,6))
-    
-    plt.subplot(121)
-    plot_state(d, layer_names, t)
-    
-    plt.subplot(122)
     plot_screen_distr(d, t)
     plt.show()
         
-        
-        
-        
-        
-        
-        
+def get_spatial_args(insp_dict):
+    spatial_names = ['screen_distr','minimap_distr','screen2_distr']
+    spatial_args = []
+    for k in insp_dict.keys():
+        T = False
+        for s in spatial_names:
+            if s in k:
+                T = True
+        if T:
+            spatial_args.append(k)
+    return spatial_args
+
+
+
