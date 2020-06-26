@@ -61,7 +61,7 @@ def plot_screen(current_state, names, last_state=None, click=None, last_click=No
     BACKGROUND_COLOR2 = np.array([0,0,0]) # black
     BACKGROUND_COLOR3 = np.array([127,153,127]) # green + grey - explored but with fog
     ENEMY_COLOR = np.array([200,10,10]) # red
-    CLICK_COLOR = np.array([250,250,250]) # light blue with a bit of grey
+    CLICK_COLOR = np.array([250,250,250]) # white
     LAST_CLICK_COLOR = np.array([102,255,0]) # light green
     s = current_state
     screen_names = names['screen_names'] 
@@ -115,12 +115,11 @@ def plot_minimap(current_state, names, last_state=None, click=None, last_click=N
     BACKGROUND_COLOR2 = np.array([0,0,0]) # black
     BACKGROUND_COLOR3 = np.array([127,153,127]) # green + grey - explored but with fog
     ENEMY_COLOR = np.array([200,10,10]) # red
-    LAST_CLICK_COLOR = np.array([250,250,250]) # white
-    CLICK_COLOR = np.array([102,255,0]) # light green
+    CLICK_COLOR = np.array([250,250,250]) # white
+    LAST_CLICK_COLOR = np.array([102,255,0]) # light green
     minimap_names = names['minimap_names'] 
     minimap_start_idx = len(names['screen_names']) # offset for the state
     s = current_state[minimap_start_idx:]
-    
     rgb_map = np.full(s.shape[-2:]+(3,), BACKGROUND_COLOR)
     if 'visibility_map_2' in minimap_names:
         vm_idx = np.where(minimap_names == 'visibility_map_2')[0] # only first element of the tuple for 1d arrays
@@ -134,7 +133,6 @@ def plot_minimap(current_state, names, last_state=None, click=None, last_click=N
     friendly_idx = np.where(minimap_names == 'player_relative_1')[0]
     neutral_idx = np.where(minimap_names == 'player_relative_3')[0]
     enemy_idx = np.where(minimap_names == 'player_relative_4')[0]
-    
     ### Plot old position if possible ###
     if last_state is not None:
         ls = last_state[minimap_start_idx:]

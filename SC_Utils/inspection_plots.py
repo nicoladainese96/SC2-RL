@@ -4,7 +4,7 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 import matplotlib.gridspec as gridspec
 import math
 import torch
-from SC_Utils.render import plot_screen, plot_minimap
+from SC_Utils.render import plot_screen, plot_minimap, plot_screen_layers_grid, plot_minimap_layers_grid
 
 ### Scalar variable plots ###
 def plot_rewards(rewards):
@@ -115,7 +115,7 @@ def plot_state(inspector, d, layer_names, t):
     current_state = d['state_traj'][t][0]
     click = None
     # get all arguments' names that the action selected requires
-    a = d['action_sel'][0][0]
+    a = d['action_sel'][t][0]
     a_name = inspector.action_dict[a].name
     #print("action name: ", a_name)
     arg_names = [arg_name for arg_name in list(d.keys()) if a_name in arg_name]
@@ -153,7 +153,7 @@ def plot_minimap_state(inspector, d, layer_names, t):
     current_state = d['state_traj'][t][0]
     click = None
     # get all arguments' names that the action selected requires
-    a = d['action_sel'][0][0]
+    a = d['action_sel'][t][0]
     a_name = inspector.action_dict[a].name
     #print("action name: ", a_name)
     arg_names = [arg_name for arg_name in list(d.keys()) if a_name in arg_name]
@@ -251,5 +251,18 @@ def get_spatial_args(insp_dict):
             spatial_args.append(k)
     return spatial_args
 
-
-
+def plot_screen_layers(d, layer_names, t, n_cols=5):
+    current_state = d['state_traj'][t][0]
+    n_screen_layers = len(layer_names['screen_names'])
+    plt.figure(figsize=(3*n_cols, 3*math.ceil(n_screen_layers/n_cols)))
+    plot_screen_layers_grid(current_state, layer_names)
+    plt.show()
+    
+def plot_minimap_layers(d, layer_names, t, n_cols=5):
+    current_state = d['state_traj'][t][0]
+    n_minimap_layers = len(layer_names['minimap_names'])
+    plt.figure(figsize=(3*n_cols, 3*math.ceil(n_minimap_layers/n_cols)))
+    plot_minimap_layers_grid(current_state, layer_names)
+    plt.show()
+    
+    
