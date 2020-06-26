@@ -31,7 +31,7 @@ class ObsProcesser():
                             'power': (3,'unknown'), 
                             'player_id': (4,'ohe', 3), # 1,2,16
                             'player_relative': (5,'ohe', 3), # friendly (1), neutral (3), enemy (4)
-                            'unit_type': (6,'ohe', 9), # dependent on the number of minigames considered and unit in them 
+                            'unit_type': (6,'ohe', 11), # dependent on the number of minigames considered and unit in them 
                             'selected': (7,'ohe', 1),
                             'unit_hit_points': (8,'log'), 
                             'unit_hit_points_ratio': (9,'log'), 
@@ -70,7 +70,7 @@ class ObsProcesser():
                                   'visibility_map':np.array([1,2]),
                                   'player_id':np.array([1,2,16]),
                                   'player_relative':np.array([1,3,4]),
-                                  'unit_type':np.array([9, 18, 48, 105, 110, 317, 341, 342, 1680]),
+                                  'unit_type':np.array([9, 18, 20, 45, 48, 105, 110, 317, 341, 342, 1680]),
                                   'selected':np.array([1]),
                                   'pathable':np.array([1]),
                                   'buildable':np.array([1]),
