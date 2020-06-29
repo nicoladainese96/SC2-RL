@@ -69,8 +69,8 @@ class SpatialA2C():
         action_mask = torch.tensor(action_mask).to(self.device)
         
         log_probs, spatial_features, nonspatial_features = self.AC.pi(state, action_mask)
+        entropy = self.compute_entropy(log_probs)
         probs = torch.exp(log_probs)
-        entropy = self.compute_entropy(probs)
         a = Categorical(probs).sample()
         a = a.detach().cpu().numpy()
         log_prob = log_probs[range(len(a)), a]
@@ -96,12 +96,12 @@ class SpatialA2C():
         results = {}    
         for arg_name in self.AC.arguments_dict.keys():
             if self.AC.arguments_type[arg_name] == 'categorical':
-                arg_sampled, log_prob, probs = self.AC.sample_param(nonspatial_features, arg_name)
+                arg_sampled, log_prob, log_probs = self.AC.sample_param(nonspatial_features, arg_name)
             elif self.AC.arguments_type[arg_name] == 'spatial':
-                arg_sampled, log_prob, probs = self.AC.sample_param(spatial_features, arg_name)
+                arg_sampled, log_prob, log_probs = self.AC.sample_param(spatial_features, arg_name)
             else:
                 raise Exception("argument type for "+arg_name+" not understood")  
-            entropy = self.compute_entropy(probs)
+            entropy = self.compute_entropy(log_probs)
             results[arg_name] = (arg_sampled, log_prob, entropy)
            
         ### For every action get the list of arguments and their log prob and entropy ###
@@ -130,13 +130,14 @@ class SpatialA2C():
         args_entropy = torch.stack(args_entropy, axis=0).squeeze()
         return args, args_log_prob, args_entropy
  
-    def compute_entropy(self, probs):
+    def compute_entropy(self, log_probs):
         """
-        Computes NEGATIVE entropy of a batch (b, n_actions) of probabilities.
+        Computes NEGATIVE entropy of a batch (b, n_actions) of log probabilities.
         Returns the entropy of each sample in the batch (b,)
         """
-        probs = probs + torch.tensor([1e-5]).float().to(self.device) # add a small regularization to probs 
-        entropy = torch.sum(probs*torch.log(probs), axis=1)
+        probs = torch.exp(log_probs) 
+        distr = Categorical(probs=p)
+        entropy = -distr.entropy()
         return entropy
     
     def compute_ac_loss(self, rewards, log_probs, entropies, states, done, bootstrap, trg_states): 
@@ -314,8 +315,8 @@ class SpatialA2C_v1(SpatialA2C):
         action_mask = torch.tensor(action_mask).to(self.device)
         
         log_probs, spatial_features, nonspatial_features = self.AC.pi(state, action_mask)
+        entropy = self.compute_entropy(log_probs)
         probs = torch.exp(log_probs)
-        entropy = self.compute_entropy(probs)
         a = Categorical(probs).sample()
         a = a.detach().cpu().numpy()
         embedded_a = self._embed_action(a)
@@ -347,12 +348,12 @@ class SpatialA2C_v1(SpatialA2C):
         results = {}    
         for arg_name in self.AC.arguments_dict.keys():
             if self.AC.arguments_type[arg_name] == 'categorical':
-                arg_sampled, log_prob, probs = self.AC.sample_param(nonspatial_features, arg_name)
+                arg_sampled, log_prob, log_probs = self.AC.sample_param(nonspatial_features, arg_name)
             elif self.AC.arguments_type[arg_name] == 'spatial':
-                arg_sampled, log_prob, probs = self.AC.sample_param(spatial_features, arg_name)
+                arg_sampled, log_prob, log_probs = self.AC.sample_param(spatial_features, arg_name)
             else:
                 raise Exception("argument type for "+arg_name+" not understood")  
-            entropy = self.compute_entropy(probs)
+            entropy = self.compute_entropy(log_probs)
             results[arg_name] = (arg_sampled, log_prob, entropy)
            
         ### For every action get the list of arguments and their log prob and entropy ###
@@ -426,8 +427,8 @@ class SpatialA2C_v3(SpatialA2C):
         action_mask = torch.tensor(action_mask).to(self.device)
         
         log_probs, spatial_features, nonspatial_features = self.AC.pi(state, action_mask)
+        entropy = self.compute_entropy(log_probs)
         probs = torch.exp(log_probs)
-        entropy = self.compute_entropy(probs)
         a = Categorical(probs).sample()
         a = a.detach().cpu().numpy()
         embedded_a = self._embed_action(a)
@@ -458,12 +459,12 @@ class SpatialA2C_v3(SpatialA2C):
         results = {}    
         for arg_name in self.AC.arguments_dict.keys():
             if self.AC.arguments_type[arg_name] == 'categorical':
-                arg_sampled, log_prob, probs = self.AC.sample_param(arg_name, nonspatial_features)
+                arg_sampled, log_prob, log_probs = self.AC.sample_param(arg_name, nonspatial_features)
             elif self.AC.arguments_type[arg_name] == 'spatial':
-                arg_sampled, log_prob, probs = self.AC.sample_param(arg_name, spatial_features, embedded_a)
+                arg_sampled, log_prob, log_probs = self.AC.sample_param(arg_name, spatial_features, embedded_a)
             else:
                 raise Exception("argument type for "+arg_name+" not understood")  
-            entropy = self.compute_entropy(probs)
+            entropy = self.compute_entropy(log_probs)
             results[arg_name] = (arg_sampled, log_prob, entropy)
            
         ### For every action get the list of arguments and their log prob and entropy ###

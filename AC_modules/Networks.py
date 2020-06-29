@@ -202,7 +202,7 @@ class CategoricalNet(nn.Module):
         probs = torch.exp(log_probs)
         arg = Categorical(probs).sample()
         arg = arg.detach().cpu().numpy()
-        return arg.reshape(-1,1), log_probs[range(len(arg)), arg], probs
+        return arg.reshape(-1,1), log_probs[range(len(arg)), arg], log_probs
 
 ### sample spatial parameters from a matrix-like state representation
 
@@ -234,7 +234,7 @@ class SpatialParameters(nn.Module):
         else:
             arg_lst = [[yi.item(),xi.item()] for xi, yi in zip(x,y)]
         log_prob = log_probs[torch.arange(B), index]
-        return arg_lst, log_prob, probs
+        return arg_lst, log_prob, log_probs
     
 class ConditionedSpatialParameters(nn.Module):
     
@@ -256,7 +256,7 @@ class ConditionedSpatialParameters(nn.Module):
         else:
             arg_lst = [[yi.item(),xi.item()] for xi, yi in zip(x,y)]
         log_prob = log_probs[torch.arange(B), index]
-        return arg_lst, log_prob, probs
+        return arg_lst, log_prob, log_probs
     
 class SpatialNet(nn.Module):
     
@@ -318,7 +318,7 @@ class SpatialNet(nn.Module):
         print("arg: ", arg)
         arg = list(arg.detach().numpy())
         
-        return arg, log_probs.view(self.size, self.size)[arg[0], arg[1]], probs
+        return arg, log_probs.view(self.size, self.size)[arg[0], arg[1]], log_probs
     
 class OheNet(nn.Module):
     """Learns a vectorial state representation starting from a multi-channel image-like state."""
