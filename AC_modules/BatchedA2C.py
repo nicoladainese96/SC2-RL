@@ -136,7 +136,7 @@ class SpatialA2C():
         Returns the entropy of each sample in the batch (b,)
         """
         probs = torch.exp(log_probs) 
-        distr = Categorical(probs=p)
+        distr = Categorical(probs=probs)
         entropy = -distr.entropy()
         return entropy
     
