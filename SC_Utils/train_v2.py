@@ -252,18 +252,18 @@ def train_batched_A2C(agent, game_params, map_name, lr, n_train_processes, max_t
                 with open(save_path+'/Logging/'+PID+'.txt', 'a+') as f:
                     print("#Steps,score", file=f)
             avg_score = test(step_idx, agent, test_env, PID, op, action_dict, num_tests, save_path)
-            if inspection and (step_idx%inspection_interval==0):
-                inspector = inspection_test(step_idx, agent, test_env, PID, op, action_dict)
-                # save episode for inspection and model weights at that point
-                if not os.path.isdir(save_path):
-                    os.system('mkdir '+save_path)
-                if not os.path.isdir(save_path+'/Inspection/'):
-                    os.system('mkdir '+save_path+'/Inspection/')
-                if not os.path.isdir(save_path+'/Checkpoints/'):
-                    os.system('mkdir '+save_path+'/Checkpoints/')
-                inspector.save_dict(path=save_path+'/Inspection/')
-                torch.save(agent.AC.state_dict(), save_path+'/Checkpoints/'+PID+'_'+str(step_idx))
             score.append(avg_score)
+        if inspection and (step_idx%inspection_interval==0):
+            inspector = inspection_test(step_idx, agent, test_env, PID, op, action_dict)
+            # save episode for inspection and model weights at that point
+            if not os.path.isdir(save_path):
+                os.system('mkdir '+save_path)
+            if not os.path.isdir(save_path+'/Inspection/'):
+                os.system('mkdir '+save_path+'/Inspection/')
+            if not os.path.isdir(save_path+'/Checkpoints/'):
+                os.system('mkdir '+save_path+'/Checkpoints/')
+            inspector.save_dict(path=save_path+'/Inspection/')
+            torch.save(agent.AC.state_dict(), save_path+'/Checkpoints/'+PID+'_'+str(step_idx))
     envs.close()
     
     losses = dict(critic_losses=critic_losses, actor_losses=actor_losses, entropies=entropy_losses)
