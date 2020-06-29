@@ -165,6 +165,18 @@ class ParallelEnv:
             worker.join()
             self.closed = True
             
+class H_linear_schedule():
+    def __init__(self, H_init, H_end, max_train_steps):
+        self.H0 = H_init
+        self.m = (H_end-H_init)/max_train_steps
+        self.max_steps = max_train_steps
+        
+    def get_H(self, step_idx):
+        # clip at max_step (independent assurance from init conditions)
+        if step_idx > self.max_steps:
+            step_idx = self.max_steps
+        return self.H0 + self.m*step_idx
+    
 def train_batched_A2C(agent, game_params, map_name, lr, n_train_processes, max_train_steps, 
                       unroll_length, obs_proc_params, action_dict,
                       test_interval=100, num_tests=5, inspection_interval=120000, save_path=None):
@@ -178,6 +190,7 @@ def train_batched_A2C(agent, game_params, map_name, lr, n_train_processes, max_t
     envs = ParallelEnv(n_train_processes, game_params, map_name, obs_proc_params, action_dict)
 
     optimizer = torch.optim.Adam(agent.AC.parameters(), lr=lr)
+    H_schedule = H_linear_schedule(agent.H, agent.H/10, max_train_steps)
     PID = gen_PID()
     print("Process ID: ", PID)
     score = []
@@ -228,6 +241,8 @@ def train_batched_A2C(agent, game_params, map_name, lr, n_train_processes, max_t
         actor_losses.append(actor_loss.item())
         entropy_losses.append(entropy_term.item())
         
+        H = H_schedule.get_H(step_idx)
+        agent.H = H
         
         ### Test time ###
         if step_idx % test_interval == 0:
