@@ -37,7 +37,7 @@ parser.add_argument('--max_train_steps', type=int, help='Number of env steps use
 parser.add_argument('--test_interval', type=int, help='Number of steps after which a test episode is executed', 
                     default=60*100) # express this as a multiple of traj_length
 parser.add_argument('--inspection_interval', type=int, help='Number of steps after which an in-depth inspection is executed',
-                    default=55000)
+                    default=60000)
 # Paths
 parser.add_argument('--save_dir', type=str, help='Path to save directory', default='Results/')
 
@@ -74,7 +74,7 @@ def main():
     embed_dim = args.embed_dim
     spatial_dict = {"in_channels":in_channels}
     nonspatial_dict = {'resolution':RESOLUTION, 'kernel_size':3, 'stride':2}
-    HPs = dict(action_space=action_space, n_steps=args.n_steps, H=1e-1, 
+    HPs = dict(action_space=action_space, n_steps=args.n_steps, H=1e-2, 
            spatial_model=spatial_model, nonspatial_model=nonspatial_model,
            n_features=args.n_features, n_channels=args.n_channels, 
            spatial_dict=spatial_dict, nonspatial_dict=nonspatial_dict, 
