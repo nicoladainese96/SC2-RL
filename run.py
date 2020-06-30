@@ -75,7 +75,7 @@ def main():
     spatial_dict = {"in_channels":in_channels}
     nonspatial_dict = {'resolution':RESOLUTION, 'kernel_size':3, 'stride':2}
 
-    HPs = dict(action_space=action_space, n_steps=args.n_steps, H=1e-2, 
+    HPs = dict(action_space=action_space, n_steps=args.n_steps, H=7e-2, 
            spatial_model=spatial_model, nonspatial_model=nonspatial_model,
            n_features=args.n_features, n_channels=args.n_channels, 
            spatial_dict=spatial_dict, nonspatial_dict=nonspatial_dict, 
