@@ -293,6 +293,15 @@ class SpatialA2C_v2(SpatialA2C):
                                      nonspatial_dict, n_features, n_channels, action_dict)
         self.device = device 
         self.AC.to(self.device)
+
+class SpatialA2C_MaxEnt(SpatialA2C_v2):
+    def __init__(self, action_space, env, spatial_model, nonspatial_model, 
+                 spatial_dict,  nonspatial_dict, n_features, n_channels,
+                 gamma=0.99, action_dict=None, H=1e-3, n_steps=20, device='cpu'):
+        super().__init__(action_space, env, spatial_model, nonspatial_model, 
+                 spatial_dict,  nonspatial_dict, n_features, n_channels,
+                 gamma=0.99, action_dict=None, H=1e-3, n_steps=20, device='cpu')
+     
         
 ### Conditioning parameters on actions ###
     

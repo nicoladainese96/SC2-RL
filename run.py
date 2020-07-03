@@ -1,6 +1,6 @@
 from Utils import utils
 from SC_Utils.game_utils import ObsProcesser, get_action_dict
-from SC_Utils.train_v2 import *
+from SC_Utils.train_v3 import *
 from AC_modules.BatchedA2C import SpatialA2C, SpatialA2C_v1, SpatialA2C_v2, SpatialA2C_v3
 import AC_modules.Networks as net
 import torch
