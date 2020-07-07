@@ -8,9 +8,9 @@ from SC_Utils.A2C_inspection import InspectionDict, inspection_step
             
 def inspection_update(agent, rewards, log_probs, entropies, states, done, bootstrap, trg_states): 
     old_states = torch.tensor(states).float().to(agent.device).reshape((-1,)+states.shape[2:])
-    entropies = torch.stack(entropies, axis=0).transpose(1,0).to(agent.device)
-    V_trg = agent.compute_n_step_V_trg(agent.n_steps, rewards, done, bootstrap, states, entropies)
-    log_probs = torch.stack(log_probs).to(agent.device).transpose(1,0).reshape(-1)
+    log_probs = torch.stack(log_probs, axis=0).transpose(1,0).to(agent.device)
+    V_trg = agent.compute_n_step_V_trg(agent.n_steps, rewards, done, bootstrap, states, log_probs)
+    log_probs = log_probs.reshape(-1)
 
     values, trg_values, critic_losses = inspect_critic_loss(agent, old_states, V_trg)
 
@@ -31,7 +31,7 @@ def inspect_critic_loss(agent, old_states, V_trg):
         critic_losses = (V-V_trg)**2
     return V, V_trg, critic_losses
 
-def inspect_actor_loss(agent, log_probs,old_states, V_trg):
+def inspect_actor_loss(agent, log_probs, old_states, V_trg):
     with torch.no_grad():
         V_pred = agent.AC.V_critic(old_states).squeeze()
         A = V_trg.detach() - V_pred

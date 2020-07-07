@@ -1,42 +1,27 @@
 import torch
 import torch.multiprocessing as mp
-import matplotlib.pyplot as plt
-#import time
 import numpy as np
 import string
 import random
 import copy
 
-import os
 import sys
 sys.path.insert(0, "../")
-from SC_Utils.game_utils import ObsProcesser
-ME_version = 2
-if ME_version == 1:
-    from SC_Utils.A2C_inspection_MaxEnt import *
-elif ME_version == 2:
-    from SC_Utils.A2C_inspection_MaxEnt_v2 import *
-else:
-    raise Exception("Only versions 1 and 2 accepted")
-    
-from pysc2.env import sc2_env
-from pysc2.lib import actions
+from SC_Utils.game_utils import FullObsProcesser
+from SC_Utils.train_MaxEnt import gen_PID, get_action_mask, init_game, reset_and_skip_first_frame
 
 debug=False
 inspection=True
 
-def gen_PID():
-    ID = ''.join([random.choice(string.ascii_letters) for _ in range(4)])
-    ID = ID.upper()
-    return ID
-
-def get_action_mask(available_actions, action_dict):
-    action_mask = ~np.array([action_dict[i] in available_actions for i in action_dict.keys()])
-    return action_mask
-
 def merge_screen_and_minimap(state_dict):
+    """
+    Returns a tuple (state, player), where
+    state = (screen+minimap channels, res, res) # no batch dim
+    player = (player_features,) # no batch dim
+    """
     screen = state_dict['screen_layers']
     minimap = state_dict['minimap_layers']
+    player = state_dict['player_features']
     if len(minimap) > 0:
         try:
             assert screen.shape[-2:] == minimap.shape[-2:], 'different resolutions'
@@ -50,42 +35,20 @@ def merge_screen_and_minimap(state_dict):
         state = screen
     else:
         raise Exception("Both screen and minimap seem to have 0 layers.")
-    return state              
+    return state, player              
 
-def init_game(game_params, map_name='MoveToBeacon', step_multiplier=8, **kwargs):
-
-    race = sc2_env.Race(1) # 1 = terran
-    agent = sc2_env.Agent(race, "Testv0") # NamedTuple [race, agent_name]
-    agent_interface_format = sc2_env.parse_agent_interface_format(**game_params) #AgentInterfaceFormat instance
-
-    game_params = dict(map_name=map_name, 
-                       players=[agent], # use a list even for single player
-                       game_steps_per_episode = 0,
-                       step_mul = step_multiplier,
-                       agent_interface_format=[agent_interface_format] # use a list even for single player
-                       )  
-    env = sc2_env.SC2Env(**game_params, **kwargs)
-
-    return env
-
-def reset_and_skip_first_frame(env):
-    _ = env.reset()
-    action = actions.FunctionCall(actions.FUNCTIONS.no_op.id, [])
-    obs = env.step(actions = [action])
-    return obs
-    
 def worker(worker_id, master_end, worker_end, game_params, map_name, obs_proc_params, action_dict):
     master_end.close()  # Forbid worker to use the master end for messaging
     np.random.seed() # sets random seed for the environment
     env = init_game(game_params, map_name, random_seed=np.random.randint(10000))
-    op = ObsProcesser(**obs_proc_params)
+    op = FullObsProcesser(**obs_proc_params)
     
     while True:
         cmd, data = worker_end.recv()
         if cmd == 'step':
             obs = env.step([data])
             state_trg_dict, _ = op.get_state(obs)  #returns (state_dict, names_dict)
-            state_trg = merge_screen_and_minimap(state_trg_dict)
+            state_trg = merge_screen_and_minimap(state_trg_dict) # state now is a tuple
             reward = obs[0].reward
             done = obs[0].last()
             
@@ -101,7 +64,7 @@ def worker(worker_id, master_end, worker_end, game_params, map_name, obs_proc_pa
             if done:
                 obs = reset_and_skip_first_frame(env)
                 state_dict, _ = op.get_state(obs)  # returns (state_dict, names_dict)
-                state = merge_screen_and_minimap(state_dict)
+                state = merge_screen_and_minimap(state_dict) # state now is a tuple
             else:
                 state = state_trg
                 
@@ -112,7 +75,7 @@ def worker(worker_id, master_end, worker_end, game_params, map_name, obs_proc_pa
         elif cmd == 'reset':
             obs = reset_and_skip_first_frame(env)
             state_dict, _ = op.get_state(obs) # returns (state_dict, names_dict)
-            state = merge_screen_and_minimap(state_dict)
+            state = merge_screen_and_minimap(state_dict) # state now is a tuple
             available_actions = obs[0].observation.available_actions
             action_mask = get_action_mask(available_actions, action_dict)
             
@@ -154,14 +117,20 @@ class ParallelEnv:
         results = [master_end.recv() for master_end in self.master_ends]
         self.waiting = False
         states, rews, dones, bootstraps, trg_states, action_mask = zip(*results)
-        return np.stack(states), np.stack(rews), np.stack(dones), np.stack(bootstraps), np.stack(trg_states), np.stack(action_mask)
+        states = np.stack(states)
+        states = {"spatial":np.stack(states[:,0]), "player":np.stack(states[:,1])}
+        trg_states = np.stack(trg_states)
+        trg_states = {"spatial":np.stack(trg_states[:,0]), "player":np.stack(trg_states[:,1])}
+        return states, np.stack(rews), np.stack(dones), np.stack(bootstraps), trg_states, np.stack(action_mask)
 
     def reset(self):
         for master_end in self.master_ends:
             master_end.send(('reset', None))
         results = [master_end.recv() for master_end in self.master_ends]
         states, action_mask = zip(*results)
-        return np.stack(states), np.stack(action_mask)
+        states = np.stack(states)
+        states = {"spatial":np.stack(states[:,0]), "player":np.stack(states[:,1])}
+        return states, np.stack(action_mask)
 
     def step(self, actions):
         self.step_async(actions)
@@ -196,6 +165,7 @@ def train_batched_A2C(agent, game_params, map_name, lr, n_train_processes, max_t
     score = []
     critic_losses = [] 
     actor_losses = []
+    entropy_losses = []
     
     step_idx = 0
     s, a_mask = envs.reset() # reset manually only at the beginning
@@ -221,13 +191,13 @@ def train_batched_A2C(agent, game_params, map_name, lr, n_train_processes, max_t
             step_idx += 1 #n_train_processes
 
         # all variables without gradient, batch first, then episode length
-        s_lst = np.array(s_lst).transpose(1,0,2,3,4)
+        #s_lst = np.array(s_lst).transpose(1,0,2,3,4) # no more an array, but a list of dictionaries of arrays
         r_lst = np.array(r_lst).transpose(1,0)
         done_lst = np.array(done_lst).transpose(1,0)
         bootstrap_lst = np.array(bootstrap_lst).transpose(1,0)
-        s_trg_lst = np.array(s_trg_lst).transpose(1,0,2,3,4)
+        #s_trg_lst = np.array(s_trg_lst).transpose(1,0,2,3,4) # no more an array, but a list of dictionaries of arrays
 
-        critic_loss, actor_loss = agent.compute_ac_loss(r_lst, log_probs, entropies, 
+        critic_loss, actor_loss, entropy_term = agent.compute_ac_loss(r_lst, log_probs, entropies, 
                                                                  s_lst, done_lst, bootstrap_lst, s_trg_lst)
 
         
@@ -238,6 +208,7 @@ def train_batched_A2C(agent, game_params, map_name, lr, n_train_processes, max_t
             
         critic_losses.append(critic_loss.item())
         actor_losses.append(actor_loss.item())
+        entropy_losses.append(entropy_term.item())
         
         ### Test time ###
         if step_idx % test_interval == 0:
@@ -261,9 +232,8 @@ def train_batched_A2C(agent, game_params, map_name, lr, n_train_processes, max_t
             torch.save(agent.AC.state_dict(), save_path+'/Checkpoints/'+PID+'_'+str(step_idx))
     envs.close()
     
-    losses = dict(critic_losses=critic_losses, actor_losses=actor_losses)
+    losses = dict(critic_losses=critic_losses, actor_losses=actor_losses, entropies=entropy_losses)
     return score, losses, agent, PID
-
 
 def test(step_idx, agent, test_env, process_ID, op, action_dict, num_test, save_path):
     score = 0.0
@@ -274,7 +244,8 @@ def test(step_idx, agent, test_env, process_ID, op, action_dict, num_test, save_
         obs = reset_and_skip_first_frame(test_env)
         s_dict, _ = op.get_state(obs)
         s = merge_screen_and_minimap(s_dict)
-        s = s[np.newaxis, ...] # add batch dim
+        # FIXME
+        #s = s[np.newaxis, ...] # add batch dim
         available_actions = obs[0].observation.available_actions
         a_mask = get_action_mask(available_actions, action_dict)[np.newaxis, ...] # add batch dim
         
@@ -283,7 +254,8 @@ def test(step_idx, agent, test_env, process_ID, op, action_dict, num_test, save_
             obs = test_env.step(a)
             s_prime_dict, _ = op.get_state(obs) 
             s_prime = merge_screen_and_minimap(s_prime_dict)
-            s_prime = s_prime[np.newaxis, ...] # add batch dim
+            # FIXME
+            #s_prime = s_prime[np.newaxis, ...] # add batch dim
             reward = obs[0].reward
             done = obs[0].last()
             available_actions = obs[0].observation.available_actions
@@ -297,14 +269,14 @@ def test(step_idx, agent, test_env, process_ID, op, action_dict, num_test, save_
         print(f"{step_idx},{score/num_test:.1f}", file=f)
     return score/num_test
 
-
 def inspection_test(step_idx, agent, test_env, process_ID, op, action_dict):
     inspector = InspectionDict(step_idx, process_ID, action_dict, test_env)
     
     obs = reset_and_skip_first_frame(test_env)
     s_dict, _ = op.get_state(obs)
     s = merge_screen_and_minimap(s_dict)
-    s = s[np.newaxis, ...] # add batch dim
+    # FIXME
+    #s = s[np.newaxis, ...] # add batch dim
     available_actions = obs[0].observation.available_actions
     a_mask = get_action_mask(available_actions, action_dict)[np.newaxis, ...] # add batch dim
     
@@ -321,7 +293,8 @@ def inspection_test(step_idx, agent, test_env, process_ID, op, action_dict):
         obs = test_env.step(a)
         s_prime_dict, _ = op.get_state(obs) 
         s_prime = merge_screen_and_minimap(s_prime_dict)
-        s_prime = s_prime[np.newaxis, ...] # add batch dim
+        # FIXME
+        #s_prime = s_prime[np.newaxis, ...] # add batch dim
         reward = obs[0].reward
         done = obs[0].last()
         available_actions = obs[0].observation.available_actions
@@ -342,11 +315,13 @@ def inspection_test(step_idx, agent, test_env, process_ID, op, action_dict):
         G += reward
         
     inspector.dict['rewards'] = r_lst
-    s_lst = np.array(s_lst).transpose(1,0,2,3,4)
+    # FIXME
+    #s_lst = np.array(s_lst).transpose(1,0,2,3,4)
     r_lst = np.array(r_lst).reshape(1,-1)
     done_lst = np.array(done_lst).reshape(1,-1)
     bootstrap_lst = np.array(bootstrap_lst).reshape(1,-1)
-    s_trg_lst = np.array(s_trg_lst).transpose(1,0,2,3,4)    
+    # FIXME
+    #s_trg_lst = np.array(s_trg_lst).transpose(1,0,2,3,4)    
     update_dict = inspection_update(agent, r_lst, log_probs, entropies, s_lst, 
                                     done_lst, bootstrap_lst, s_trg_lst)
     inspector.store_update(update_dict)

@@ -11,14 +11,8 @@ import os
 import sys
 sys.path.insert(0, "../")
 from SC_Utils.game_utils import ObsProcesser
-ME_version = 2
-if ME_version == 1:
-    from SC_Utils.A2C_inspection_MaxEnt import *
-elif ME_version == 2:
-    from SC_Utils.A2C_inspection_MaxEnt_v2 import *
-else:
-    raise Exception("Only versions 1 and 2 accepted")
-    
+from SC_Utils.A2C_inspection_MaxEnt_v2 import *
+
 from pysc2.env import sc2_env
 from pysc2.lib import actions
 

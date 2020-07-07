@@ -90,6 +90,7 @@ class ParallelEnv:
                            args=(worker_id, master_end, worker_end, game_params, 
                                  map_name, obs_proc_params, action_dict))
             p.daemon = True
+            time.sleep(1)
             p.start()
             self.workers.append(p)
 
@@ -155,7 +156,7 @@ def train_batched_A2C(agent, game_params, map_name, lr, n_train_processes, max_t
     envs = ParallelEnv(n_train_processes, game_params, map_name, obs_proc_params, action_dict)
 
     optimizer = torch.optim.Adam(agent.AC.parameters(), lr=lr)
-    H_schedule = H_linear_schedule(agent.H, agent.H/10, max_train_steps)
+    #H_schedule = H_linear_schedule(agent.H, agent.H/10, max_train_steps)
     PID = gen_PID()
     print("Process ID: ", PID)
     score = []
@@ -206,8 +207,8 @@ def train_batched_A2C(agent, game_params, map_name, lr, n_train_processes, max_t
         actor_losses.append(actor_loss.item())
         entropy_losses.append(entropy_term.item())
         
-        H = H_schedule.get_H(step_idx)
-        agent.H = H
+        #H = H_schedule.get_H(step_idx)
+        #agent.H = H
         
         ### Test time ###
         if step_idx % test_interval == 0:
