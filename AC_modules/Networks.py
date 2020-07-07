@@ -73,6 +73,34 @@ class FullyConvSpatial(nn.Module):
     def forward(self, x):
         return self.net(x)
     
+class FullyConvPlayerAndSpatial(nn.Module):
+    def __init__(self, in_channels, in_player, player_features, conv_channels=32):
+        super(FullyConvPlayerAndSpatial, self).__init__()
+        self.conv_net = FullyConvSpatial(in_channels, conv_channels)
+        self.fc_net = nn.Sequential(
+                                    nn.Linear(in_player, 64),
+                                    nn.ReLU(),
+                                    nn.Linear(64, player_features),
+                                    nn.ReLU()
+                                    )
+        
+    def forward(self, spatial_state, player_state):
+        spatial_x = self.conv_net(spatial_state)
+        player_x = self.fc_net(player_state)
+        spatial_features = self._cat_player_to_spatial(player_x, spatial_x)
+        
+    def _cat_player_to_spatial(self, player_x, spatial_x):
+        """ 
+        Assume spatial_x of shape (B, conv_channels, res, res).
+        Cast player_x from (B, player_features) to (B, player_features, res, res)
+        Concatenate spatial_x with the broadcasted player_x along the channel dim.
+        """
+        res = spatial_x.shape[-1]
+        player_x = player_x.reshape((player_x.shape[:2]+(1,1,)))
+        player_x = player_x.repeat(1,1,res,res)
+        spatial_features = torch.cat([spatial_x, player_x], dim=1)
+        return spatial_features
+    
 class FullyConvNonSpatial(nn.Module):
     def __init__(self, n_features=256, n_channels=32, hidden_channels=64, resolution=16, kernel_size=3, stride=2):
         super(FullyConvNonSpatial, self).__init__()

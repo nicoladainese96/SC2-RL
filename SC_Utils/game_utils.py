@@ -201,3 +201,32 @@ class ObsProcesser():
         mask = (layer!=0) 
         layer[mask] = np.log2(layer[mask])
         return layer.reshape((1,)+layer.shape[-2:]).astype(float), [name]
+    
+class FullObsProcesser(ObsProcesser):
+    def __init__(self, screen_names=[], minimap_names=[], select_all=False):
+        super().__init__(screen_names, minimap_names, select_all)
+        self.useful_indexes = np.arange(1,9)
+        
+    def get_state(self, obs):
+        feature_screen = obs[0].observation['feature_screen']
+        feature_minimap = obs[0].observation['feature_minimap']
+        player_info = obs[0].observation['player'].astype(float)
+        
+        screen_layers, screen_names = self._process_screen_features(feature_screen)
+        minimap_layers, minimap_names = self._process_minimap_features(feature_minimap)
+        player_features, player_names = self._process_player_features(player_info)
+        state = {'screen_layers':screen_layers, 'minimap_layers':minimap_layers, 'player_features':player_features}
+        names = {'screen_names':screen_names, 'minimap_names':minimap_names, 'player_names':player_names}
+        return state, names
+    
+    def _process_player_features(self, player):
+        x = player[self.useful_indexes]
+        f =  lambda x: np.log2(x) if x != 0 else x
+        x['minerals'] = f(x['minerals'])
+        x['vespene'] = f(x['vespene'])
+        return np.array(x), np.array(list(x._index_names[0].keys()))
+    
+    def get_n_channels(self):
+        screen_channels, minimap_channels = super().get_n_channels()
+        player_channels = len(self.useful_indexes)
+        return screen_channels, minimap_channels, player_channels
