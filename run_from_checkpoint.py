@@ -18,8 +18,8 @@ from absl import flags
 
 parser = argparse.ArgumentParser(description='A2C for StarCraftII minigames')
 # Checkpoint info
-parser.add_argumjent('PID', type=str, help='Process Identifier of the checkpoint')
-parser.add_argumjent('step_idx', type=int, help='Step to load among PID checkpoints')
+parser.add_argument('PID', type=str, help='Process Identifier of the checkpoint')
+parser.add_argument('step_idx', type=int, help='Step to load among PID checkpoints')
 # Game arguments
 parser.add_argument('--res', type=int, help='Screen and minimap resolution', default=32)
 parser.add_argument('--map_name', type=str, help='Name of the minigame', default='MoveToBeacon')
@@ -57,6 +57,7 @@ args, unknown_flags = parser.parse_known_args()  # Let argparse parse known flag
 flags.FLAGS(sys.argv[:1] + unknown_flags)  # Let absl.flags parse the rest.
 
 def main():
+    PID = args.PID
     # Environment parameters
     RESOLUTION = args.res
     game_params = dict(feature_screen=RESOLUTION, feature_minimap=RESOLUTION, action_space="FEATURES") 
@@ -136,7 +137,7 @@ def main():
     filename = 'S_'+filename
         
     # Actual training
-    results = train_from_checkpoint(agent, PID, step_idx, filename, game_params, map_name, 
+    results = train_from_checkpoint(agent, PID, args.step_idx, filename, game_params, map_name, 
                                     args.lr, obs_proc_params=obs_proc_params, action_dict=action_dict,
                                     save_path=args.save_dir+map_name, **train_dict)
     score, losses, trained_agent, PID = results

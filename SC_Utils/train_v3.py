@@ -272,7 +272,7 @@ def train_from_checkpoint(agent, PID, step_idx, filename, game_params, map_name,
         train_session_dict = np.load(save_path+filename+'.npy', allow_pickle=True)
         losses = train_session_dict['losses']
         # Cut everything at the step_idx assuming that test and inspection intervals remained the same
-        score = train_session_dict['score'][step_idx//inspection_interval]
+        score = train_session_dict['score'][step_idx//test_interval]
         print("len(score): ", len(score))
         critic_losses = losses['critic_losses'][step_idx//unroll_length]
         actor_losses = losses['actor_losses'][step_idx//unroll_length]
