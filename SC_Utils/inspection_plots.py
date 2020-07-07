@@ -107,7 +107,7 @@ def plot_update_curves(d, t_min=0, t_max=-1):
 def print_action_info(inspector, d, t):
     print("\nStep %d"%t)
     for i in inspector.action_dict.keys():
-        print("Action "+inspector.action_dict[i].name, '- prob: %.2f'%d['action_distr'][t][0,i])
+        print("Action "+inspector.action_dict[i].name, '- prob: %.3f'%d['action_distr'][t][0,i])
     print("-"*35)
     print("Action chosen: ", inspector.action_dict[d['action_sel'][t][0]].name)
     
@@ -197,7 +197,7 @@ def plot_screen_distr(d, t, alpha=0.7):
     for i in range(num_spatial_args):
         ax1 = plt.subplot(gs1[i])
         ax1.set_title(spatial_args[i])
-        probs = d[spatial_args[i]][t]
+        probs = np.exp(d[spatial_args[i]][t])
         _plot_screen_distr(probs)
         plt.axis('on')
 

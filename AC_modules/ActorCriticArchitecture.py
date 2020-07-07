@@ -42,6 +42,9 @@ class SharedCritic(nn.Module):
         return V
     
 class SpatialActorCritic(nn.Module):
+    """
+    Used in SpatialA2C
+    """
     def __init__(self, action_space, env, spatial_model, nonspatial_model, spatial_dict, nonspatial_dict, 
                  n_features, n_channels, action_dict=None):
         super(SpatialActorCritic, self).__init__()
@@ -117,6 +120,9 @@ class SpatialActorCritic(nn.Module):
         return self.arguments_networks[arg_name](state_rep)
 
 class SpatialActorCritic_v1(SpatialActorCritic):
+    """
+    Used in SpatialActorCritic_v1
+    """
     def __init__(self, action_space, env, spatial_model, nonspatial_model, spatial_dict, nonspatial_dict, 
                  n_features, n_channels, action_dict=None, embed_dim=16):
         self.embed_dim = embed_dim
@@ -155,6 +161,9 @@ class SpatialActorCritic_v1(SpatialActorCritic):
         return
     
 class SpatialActorCritic_v2(SpatialActorCritic):
+    """
+    Used in SpatialA2C_v2, SpatialA2C_MaxEnt and SpatialA2C_MaxEnt_v2 - compatible with SpatialA2C too
+    """
     def __init__(self, action_space, env, spatial_model, nonspatial_model, spatial_dict, nonspatial_dict, 
                  n_features, n_channels, action_dict=None):
         super(SpatialActorCritic_v2, self).__init__(action_space, env, spatial_model, nonspatial_model,
@@ -195,6 +204,9 @@ class SpatialActorCritic_v2(SpatialActorCritic):
         return
     
 class SpatialActorCritic_v3(SpatialActorCritic):
+    """
+    Used in SpatialActorCritic_v3
+    """
     def __init__(self, action_space, env, spatial_model, nonspatial_model, spatial_dict, nonspatial_dict, 
                  n_features, n_channels, action_dict=None):
         self.embed_dim = n_channels
@@ -238,3 +250,26 @@ class SpatialActorCritic_v3(SpatialActorCritic):
         nonspatial_features otherwise.
         """
         return self.arguments_networks[arg_name](*args)
+    
+class SpatialActorCritic_v4(SpatialActorCritic_v2):
+    """
+    Used in SpatialA2C_v2, SpatialA2C_MaxEnt and SpatialA2C_MaxEnt_v2
+    """
+    def __init__(self, action_space, env, spatial_model, nonspatial_model, spatial_dict, nonspatial_dict, 
+                 n_features, n_channels, action_dict=None):
+        # Init SpatialActorCritic_v2
+        super().__init__(action_space, env, spatial_model, nonspatial_model,
+                                                 spatial_dict, nonspatial_dict, n_features, n_channels, action_dict)
+        
+    def pi(self, spatial_state, player_state, mask):
+        spatial_features = self.spatial_features_net(spatial_state, player_state)
+        nonspatial_features = self.nonspatial_features_net(spatial_features)
+        logits = self.actor(nonspatial_features) 
+        log_probs = F.log_softmax(logits.masked_fill((mask).bool(), float('-inf')), dim=-1) 
+        return log_probs, spatial_features, nonspatial_features
+    
+    def V_critic(self, spatial_state, player_state):
+        spatial_features = self.spatial_features_net(spatial_state, player_state)
+        nonspatial_features = self.nonspatial_features_net(spatial_features)
+        V = self.critic(nonspatial_features)
+        return V
