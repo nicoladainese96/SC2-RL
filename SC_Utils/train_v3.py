@@ -1,3 +1,10 @@
+"""
+1. Added reset_and_skip_first_frame
+2. Added 1 s delay in creating parallel envs
+3. Save also optimizer state dict
+4. Possibility of using linear annealing of entropy weight H (also present in v2)
+"""
+
 import torch
 import torch.multiprocessing as mp
 import matplotlib.pyplot as plt
@@ -230,6 +237,125 @@ def train_batched_A2C(agent, game_params, map_name, lr, n_train_processes, max_t
                 os.system('mkdir '+save_path+'/Checkpoints/')
             inspector.save_dict(path=save_path+'/Inspection/')
             torch.save(agent.AC.state_dict(), save_path+'/Checkpoints/'+PID+'_'+str(step_idx))
+            torch.save(optimizer.state_dict(), save_path+'/Checkpoints/optim_'+PID+'_'+str(step_idx))
+    envs.close()
+    
+    losses = dict(critic_losses=critic_losses, actor_losses=actor_losses, entropies=entropy_losses)
+    return score, losses, agent, PID
+
+def train_from_checkpoint(agent, PID, step_idx, filename, game_params, map_name, lr, n_train_processes, max_train_steps, 
+                      unroll_length, obs_proc_params, action_dict,
+                      test_interval=100, num_tests=5, inspection_interval=120000, save_path=None):
+    if save_path is None:
+        save_path = "../Results/"+map_name
+    replay_dict = dict(save_replay_episodes=num_tests,
+                       replay_dir='Replays/',
+                       replay_prefix='A2C_'+map_name)
+    test_env = init_game(game_params, map_name, **replay_dict) # save just test episodes
+    op = ObsProcesser(**obs_proc_params)
+    envs = ParallelEnv(n_train_processes, game_params, map_name, obs_proc_params, action_dict)
+
+    optimizer = torch.optim.Adam(agent.AC.parameters(), lr=lr)
+    
+    ### Different from train_batched_A2C ###
+    
+    # Load checkpoints
+    agent.AC.load_state_dict(torch.load(save_path+'/Checkpoints/'+PID+"_"+str(step_idx)))
+    # for backcompatibility with when I wasn't saving optimizer state dict
+    if os.path.isfile(save_path+'/Checkpoints/optim_'+PID+"_"+str(step_idx)):
+        print("Loading optimizer checkpoint "+PID+"_"+str(step_idx))
+        optimizer.load_state_dict(torch.load(save_path+'/Checkpoints/optim_'+PID+"_"+str(step_idx)))
+    max_train_steps = max_train_steps + step_idx # add initial offset
+    
+    # Load score and losses up to step_idx if available
+    if os.path.isfile(save_path+filename+'.npy'):
+        train_session_dict = np.load(save_path+filename+'.npy', allow_pickle=True)
+        losses = train_session_dict['losses']
+        # Cut everything at the step_idx assuming that test and inspection intervals remained the same
+        score = train_session_dict['score'][step_idx//inspection_interval]
+        print("len(score): ", len(score))
+        critic_losses = losses['critic_losses'][step_idx//unroll_length]
+        actor_losses = losses['actor_losses'][step_idx//unroll_length]
+        entropy_losses = losses['entropy_losses'][step_idx//unroll_length]
+        print("len(critic_losses): ", len(critic_losses))
+    else:
+        print("Unfortunately it wasn't possible to load the session dictionary at "+save_path+filename+'.npy')
+        score = []
+        critic_losses = [] 
+        actor_losses = []
+        entropy_losses = []
+        
+    #PID = gen_PID() # already defined
+    #step_idx = 0 # already defined
+    
+    ### End of new part ###
+    
+    print("Process ID: ", PID)
+    
+    
+    s, a_mask = envs.reset() # reset manually only at the beginning
+    while step_idx < max_train_steps:
+        s_lst, r_lst, done_lst, bootstrap_lst, s_trg_lst = list(), list(), list(), list(), list()
+        log_probs = []
+        entropies = []
+        for _ in range(unroll_length):
+
+            a, log_prob, entropy = agent.step(s, a_mask)
+            # variables with gradient
+            log_probs.append(log_prob)
+            entropies.append(entropy)
+
+            s_prime, r, done, bootstrap, s_trg, a_mask = envs.step(a)
+            s_lst.append(s)
+            r_lst.append(r)
+            done_lst.append(done)
+            bootstrap_lst.append(bootstrap)
+            s_trg_lst.append(s_trg)
+
+            s = s_prime
+            step_idx += 1 #n_train_processes
+
+        # all variables without gradient, batch first, then episode length
+        s_lst = np.array(s_lst).transpose(1,0,2,3,4)
+        r_lst = np.array(r_lst).transpose(1,0)
+        done_lst = np.array(done_lst).transpose(1,0)
+        bootstrap_lst = np.array(bootstrap_lst).transpose(1,0)
+        s_trg_lst = np.array(s_trg_lst).transpose(1,0,2,3,4)
+
+        critic_loss, actor_loss, entropy_term = agent.compute_ac_loss(r_lst, log_probs, entropies, 
+                                                                 s_lst, done_lst, bootstrap_lst, s_trg_lst)
+
+        
+        loss = (critic_loss + actor_loss).mean()
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+            
+        critic_losses.append(critic_loss.item())
+        actor_losses.append(actor_loss.item())
+        entropy_losses.append(entropy_term.item())
+        
+        ### Test time ###
+        if step_idx % test_interval == 0:
+            if not os.path.isdir(save_path+'/Logging/'):
+                os.system('mkdir '+save_path+'/Logging/')
+            if step_idx // test_interval == 1:
+                with open(save_path+'/Logging/'+PID+'.txt', 'a+') as f:
+                    print("#Steps,score", file=f)
+            avg_score = test(step_idx, agent, test_env, PID, op, action_dict, num_tests, save_path)
+            score.append(avg_score)
+        if inspection and (step_idx%inspection_interval==0):
+            inspector = inspection_test(step_idx, agent, test_env, PID, op, action_dict)
+            # save episode for inspection and model weights at that point
+            if not os.path.isdir(save_path):
+                os.system('mkdir '+save_path)
+            if not os.path.isdir(save_path+'/Inspection/'):
+                os.system('mkdir '+save_path+'/Inspection/')
+            if not os.path.isdir(save_path+'/Checkpoints/'):
+                os.system('mkdir '+save_path+'/Checkpoints/')
+            inspector.save_dict(path=save_path+'/Inspection/')
+            torch.save(agent.AC.state_dict(), save_path+'/Checkpoints/'+PID+'_'+str(step_idx))
+            torch.save(optimizer.state_dict(), save_path+'/Checkpoints/optim_'+PID+'_'+str(step_idx))
     envs.close()
     
     losses = dict(critic_losses=critic_losses, actor_losses=actor_losses, entropies=entropy_losses)
