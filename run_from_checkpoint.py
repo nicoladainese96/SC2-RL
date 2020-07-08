@@ -111,6 +111,8 @@ def main():
     else:
         raise Exception("Version not implemented.")
         
+    env.close()
+    
     # Training args
     train_dict = dict(n_train_processes = args.n_train_processes,
                       max_train_steps = args.max_train_steps,
