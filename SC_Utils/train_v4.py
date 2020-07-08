@@ -5,13 +5,16 @@ import string
 import random
 import copy
 
+import os
 import sys
 sys.path.insert(0, "../")
 from SC_Utils.game_utils import FullObsProcesser
+# Inspection still to implement
+from SC_Utils.A2C_inspection_v2 import *
 from SC_Utils.train_MaxEnt import gen_PID, get_action_mask, init_game, reset_and_skip_first_frame
 
 debug=False
-inspection=True
+inspection=False # if True still doesn't work
 
 def merge_screen_and_minimap(state_dict):
     """
@@ -146,7 +149,8 @@ class ParallelEnv:
         for worker in self.workers:
             worker.join()
             self.closed = True
-            
+        
+# Ok untill here
 def train_batched_A2C(agent, game_params, map_name, lr, n_train_processes, max_train_steps, 
                       unroll_length, obs_proc_params, action_dict,
                       test_interval=100, num_tests=5, inspection_interval=120000, save_path=None):
@@ -156,7 +160,7 @@ def train_batched_A2C(agent, game_params, map_name, lr, n_train_processes, max_t
                        replay_dir='Replays/',
                        replay_prefix='A2C_'+map_name)
     test_env = init_game(game_params, map_name, **replay_dict) # save just test episodes
-    op = ObsProcesser(**obs_proc_params)
+    op = FullObsProcesser(**obs_proc_params)
     envs = ParallelEnv(n_train_processes, game_params, map_name, obs_proc_params, action_dict)
 
     optimizer = torch.optim.Adam(agent.AC.parameters(), lr=lr)
@@ -243,9 +247,10 @@ def test(step_idx, agent, test_env, process_ID, op, action_dict, num_test, save_
         
         obs = reset_and_skip_first_frame(test_env)
         s_dict, _ = op.get_state(obs)
-        s = merge_screen_and_minimap(s_dict)
-        # FIXME
-        #s = s[np.newaxis, ...] # add batch dim
+        spatial, player = merge_screen_and_minimap(s_dict)
+        s = {"spatial":spatial, "player":player}
+        for k in s.keys():
+            s[k] = s[k][np.newaxis, ...] # add batch dim
         available_actions = obs[0].observation.available_actions
         a_mask = get_action_mask(available_actions, action_dict)[np.newaxis, ...] # add batch dim
         
@@ -253,9 +258,10 @@ def test(step_idx, agent, test_env, process_ID, op, action_dict, num_test, save_
             a, log_prob, probs = agent.step(s, a_mask)
             obs = test_env.step(a)
             s_prime_dict, _ = op.get_state(obs) 
-            s_prime = merge_screen_and_minimap(s_prime_dict)
-            # FIXME
-            #s_prime = s_prime[np.newaxis, ...] # add batch dim
+            spatial, player = merge_screen_and_minimap(s_prime_dict)
+            s_prime = {"spatial":spatial, "player":player}
+            for k in s_prime.keys():
+                s_prime[k] = s_prime[k][np.newaxis, ...] # add batch dim
             reward = obs[0].reward
             done = obs[0].last()
             available_actions = obs[0].observation.available_actions
@@ -274,9 +280,10 @@ def inspection_test(step_idx, agent, test_env, process_ID, op, action_dict):
     
     obs = reset_and_skip_first_frame(test_env)
     s_dict, _ = op.get_state(obs)
-    s = merge_screen_and_minimap(s_dict)
-    # FIXME
-    #s = s[np.newaxis, ...] # add batch dim
+    spatial, player = merge_screen_and_minimap(s_dict)
+    s = {"spatial":spatial, "player":player}
+    for k in s.keys():
+        s[k] = s[k][np.newaxis, ...] # add batch dim
     available_actions = obs[0].observation.available_actions
     a_mask = get_action_mask(available_actions, action_dict)[np.newaxis, ...] # add batch dim
     
@@ -292,9 +299,10 @@ def inspection_test(step_idx, agent, test_env, process_ID, op, action_dict):
         entropies.append(entropy)
         obs = test_env.step(a)
         s_prime_dict, _ = op.get_state(obs) 
-        s_prime = merge_screen_and_minimap(s_prime_dict)
-        # FIXME
-        #s_prime = s_prime[np.newaxis, ...] # add batch dim
+        spatial, player = merge_screen_and_minimap(s_prime_dict)
+        s_prime = {"spatial":spatial, "player":player}
+        for k in s_prime.keys():
+            s_prime[k] = s_prime[k][np.newaxis, ...] # add batch dim
         reward = obs[0].reward
         done = obs[0].last()
         available_actions = obs[0].observation.available_actions
@@ -315,13 +323,9 @@ def inspection_test(step_idx, agent, test_env, process_ID, op, action_dict):
         G += reward
         
     inspector.dict['rewards'] = r_lst
-    # FIXME
-    #s_lst = np.array(s_lst).transpose(1,0,2,3,4)
     r_lst = np.array(r_lst).reshape(1,-1)
     done_lst = np.array(done_lst).reshape(1,-1)
-    bootstrap_lst = np.array(bootstrap_lst).reshape(1,-1)
-    # FIXME
-    #s_trg_lst = np.array(s_trg_lst).transpose(1,0,2,3,4)    
+    bootstrap_lst = np.array(bootstrap_lst).reshape(1,-1)  
     update_dict = inspection_update(agent, r_lst, log_probs, entropies, s_lst, 
                                     done_lst, bootstrap_lst, s_trg_lst)
     inspector.store_update(update_dict)

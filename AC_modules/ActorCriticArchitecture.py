@@ -262,10 +262,16 @@ class SpatialActorCritic_v4(SpatialActorCritic_v2):
                                                  spatial_dict, nonspatial_dict, n_features, n_channels, action_dict)
         
     def pi(self, spatial_state, player_state, mask):
+        #print('spatial_state: ', spatial_state.shape, spatial_state)
+        #print('player_state: ', player_state.shape, player_state)
         spatial_features = self.spatial_features_net(spatial_state, player_state)
+        #print('spatial_features: ', spatial_features.shape, spatial_features)
         nonspatial_features = self.nonspatial_features_net(spatial_features)
+        #print('nonspatial_features: ', nonspatial_features.shape, nonspatial_features)
         logits = self.actor(nonspatial_features) 
+        #print('logits: ', logits.shape, logits)
         log_probs = F.log_softmax(logits.masked_fill((mask).bool(), float('-inf')), dim=-1) 
+        #print('log_probs: ', log_probs.shape, log_probs)
         return log_probs, spatial_features, nonspatial_features
     
     def V_critic(self, spatial_state, player_state):
