@@ -88,6 +88,7 @@ class FullyConvPlayerAndSpatial(nn.Module):
         spatial_x = self.conv_net(spatial_state)
         player_x = self.fc_net(player_state)
         spatial_features = self._cat_player_to_spatial(player_x, spatial_x)
+        return spatial_features
         
     def _cat_player_to_spatial(self, player_x, spatial_x):
         """ 

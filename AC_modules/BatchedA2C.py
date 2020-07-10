@@ -61,7 +61,7 @@ class SpatialA2C():
         """
         
         self.gamma = gamma
-        self.n_actions = action_space
+        #self.n_actions = action_space
         self.n_steps = n_steps
         self.H = H
         self.AC = SpatialActorCritic(action_space, env, spatial_model, nonspatial_model, spatial_dict, 
@@ -146,6 +146,8 @@ class SpatialA2C():
         return entropy
     
     def compute_ac_loss(self, rewards, log_probs, entropies, states, done, bootstrap, trg_states): 
+        assert states.shape == trg_states.shape, \
+            ("Expected states and trg_states with same shape ", states.shape, trg_states.shape)
         # merge batch and episode dimensions
         old_states = torch.tensor(states).float().to(self.device).reshape((-1,)+states.shape[2:])
 
@@ -154,11 +156,11 @@ class SpatialA2C():
             # Use as V target the mean of 1-step to n-step V targets
             V_trg = []
             for n in range(1, self.n_steps + 1):
-                n_step_V_trg = self.compute_n_step_V_trg(n, rewards, done, bootstrap, states)
+                n_step_V_trg = self.compute_n_step_V_trg(n, rewards, done, bootstrap, trg_states)
                 V_trg.append(n_step_V_trg)
             V_trg = torch.mean(torch.stack(V_trg, axis=0), axis=0)
         else:
-            V_trg = self.compute_n_step_V_trg(self.n_steps, rewards, done, bootstrap, states)
+            V_trg = self.compute_n_step_V_trg(self.n_steps, rewards, done, bootstrap, trg_states)
             
         ### Wrap variables into tensors - merge batch and episode dimensions ###    
         log_probs = torch.stack(log_probs).to(self.device).transpose(1,0).reshape(-1)
@@ -284,6 +286,8 @@ class SpatialA2C():
         shifted_done = done[rows, cols].reshape(done.shape)
         return new_states, Gamma_V, shifted_done
 
+########################################################################################################################
+
 class SpatialA2C_v2(SpatialA2C):
     """
     Difference from SpatialA2C:
@@ -297,7 +301,7 @@ class SpatialA2C_v2(SpatialA2C):
                  gamma=0.99, action_dict=None, H=1e-3, n_steps=20, device='cpu'):
         # Do not use super().__init__()
         self.gamma = gamma
-        self.n_actions = action_space
+        #self.n_actions = action_space
         self.n_steps = n_steps
         self.H = H
         self.AC = SpatialActorCritic_v2(action_space, env, spatial_model, nonspatial_model, spatial_dict, 
@@ -305,8 +309,8 @@ class SpatialA2C_v2(SpatialA2C):
         self.device = device 
         self.AC.to(self.device)
 
-    # Use this to regularize only on the entropy of the main action
     def step(self, state, action_mask):
+        """Use this to regularize only on the entropy of the main action"""
         state = torch.from_numpy(state).float().to(self.device)
         action_mask = torch.tensor(action_mask).to(self.device)
         
@@ -325,7 +329,276 @@ class SpatialA2C_v2(SpatialA2C):
         action = [actions.FunctionCall(action_id[i], args[i]) for i in range(len(action_id))]
 
         return action, log_prob, torch.mean(entropy)
+
+########################################################################################################################
+
+class FullSpaceA2C(SpatialA2C): 
+    def __init__(self, action_space, env, spatial_model, nonspatial_model, spatial_dict, nonspatial_dict, 
+                 n_features, n_channels, gamma=0.99, action_dict=None, H=1e-2, n_steps=20, device='cpu'):
+        self.gamma = gamma
+        #self.n_actions = action_space
+        self.n_steps = n_steps
+        self.H = H
+        self.AC = SpatialActorCritic_v4(action_space, env, spatial_model, nonspatial_model, spatial_dict, 
+                                     nonspatial_dict, n_features, n_channels, action_dict=action_dict)
+        self.device = device 
+        self.AC.to(self.device) 
+        
+    def step(self, state, action_mask):
+        spatial_state = state['spatial']
+        player_state = state['player']
+        spatial_state = torch.from_numpy(spatial_state).float().to(self.device)
+        player_state = torch.from_numpy(player_state).float().to(self.device)
+        action_mask = torch.tensor(action_mask).to(self.device)
+        
+        log_probs, spatial_features, nonspatial_features = self.AC.pi(spatial_state, player_state, action_mask)
+        entropy = self.compute_entropy(log_probs)
+        probs = torch.exp(log_probs)
+        a = Categorical(probs).sample()
+        a = a.detach().cpu().numpy()
+        log_prob = log_probs[range(len(a)), a]
+        
+        args, args_log_prob, args_entropy = self.get_arguments(spatial_features, nonspatial_features, a)
+        log_prob = log_prob + args_log_prob
+        # Use only entropy of main actions for regularization
+        #entropy = entropy + args_entropy
+
+        action_id = np.array([self.AC.action_dict[act] for act in a])
+        action = [actions.FunctionCall(action_id[i], args[i]) for i in range(len(action_id))]
+
+        return action, log_prob, torch.mean(entropy)
     
+    def compute_ac_loss(self, rewards, log_probs, entropies, states, done, bootstrap, trg_states): 
+        """
+        Notes:
+        - Convention for tensors: batch first
+        """
+        
+        # from list of dictionaries of arrays to 2 separate arrays
+        spatial_states_lst = [s['spatial'] for s in states] #[(batch, other dims) x traj_len times]
+        player_states_lst = [s['player'] for s in states] 
+        spatial_states = torch.tensor(spatial_states_lst).float().to(self.device).transpose(1,0)
+        player_states = torch.tensor(player_states_lst).float().to(self.device).transpose(1,0)
+        
+        spatial_states_lst_trg = [s['spatial'] for s in trg_states]
+        player_states_lst_trg = [s['player'] for s in trg_states]
+        spatial_states_trg = torch.tensor(spatial_states_lst_trg).float().to(self.device).transpose(1,0)
+        player_states_trg = torch.tensor(player_states_lst_trg).float().to(self.device).transpose(1,0)
+        
+        # merge batch and episode dimensions
+        old_spatial_states = spatial_states.reshape((-1,)+spatial_states.shape[2:])
+        old_player_states = player_states.reshape((-1,)+player_states.shape[2:])
+        
+        average_n_steps = False # TRY ME
+        if average_n_steps:
+            # Use as V target the mean of 1-step to n-step V targets
+            V_trg = []
+            for n in range(1, self.n_steps + 1):
+                n_step_V_trg = self.compute_n_step_V_trg(n, rewards, done, bootstrap, 
+                                                         spatial_states_trg, player_states_trg)
+                V_trg.append(n_step_V_trg)
+            V_trg = torch.mean(torch.stack(V_trg, axis=0), axis=0)
+        else:
+            V_trg = self.compute_n_step_V_trg(self.n_steps, rewards, done, bootstrap, 
+                                                         spatial_states_trg, player_states_trg)
+            
+        ### Wrap variables into tensors - merge batch and episode dimensions ###    
+        log_probs = torch.stack(log_probs).to(self.device).transpose(1,0).reshape(-1)
+        entropies = torch.stack(entropies, axis=0).to(self.device).reshape(-1)
+        
+        ### Compute critic and actor losses ###
+        critic_loss = self.compute_critic_loss(old_spatial_states, old_player_states, V_trg)
+        actor_loss, entropy = self.compute_actor_loss(log_probs, entropies, old_spatial_states, old_player_states, V_trg)
+
+        return critic_loss, actor_loss, entropy
+    
+    def compute_n_step_V_trg(self, n_steps, rewards, done, bootstrap, spatial_states, player_states):
+        """
+        Compute m-steps value target, with m = min(n, steps-to-episode-end).
+        Formula (for precisely n-steps):
+            V^{(n)}(t) = \sum_{k=0}^{n-1} gamma^k r_{t+k} + gamma^n * V(s_t)
+        """
+        n_step_rewards, episode_mask, n_steps_mask_b = self.compute_n_step_rewards(rewards, done, n_steps)
+        done[bootstrap] = False 
+        # Check those
+        new_spatial_states, Gamma_V, done = self.compute_n_step_states(spatial_states, done,
+                                                                       episode_mask, n_steps_mask_b)
+        new_player_states, _, _ = self.compute_n_step_states(player_states, done,
+                                                                       episode_mask, n_steps_mask_b)
+        
+        new_spatial_states = new_spatial_states.reshape((-1,)+spatial_states.shape[2:])
+        new_player_states = new_player_states.reshape((-1,)+player_states.shape[2:])
+        
+        done = torch.LongTensor(done.astype(int)).to(self.device).reshape(-1)
+        n_step_rewards = torch.tensor(n_step_rewards).float().to(self.device).reshape(-1)
+        Gamma_V = torch.tensor(Gamma_V).float().to(self.device).reshape(-1)
+        
+        with torch.no_grad():
+            V_pred = self.AC.V_critic(new_spatial_states, new_player_states).squeeze()
+            V_trg = (1-done)*Gamma_V*V_pred + n_step_rewards
+            V_trg = V_trg.squeeze()
+        return V_trg
+    
+    def compute_critic_loss(self, old_spatial_states, old_player_states, V_trg):
+        V = self.AC.V_critic(old_spatial_states, old_player_states).squeeze()
+        loss = F.mse_loss(V, V_trg)
+        return loss
+    
+    def compute_actor_loss(self, log_probs, entropies, old_spatial_states, old_player_states, V_trg):
+        with torch.no_grad():
+            V_pred = self.AC.V_critic(old_spatial_states, old_player_states).squeeze()
+        A = V_trg - V_pred
+        policy_gradient = - log_probs*A
+        policy_grad = torch.mean(policy_gradient)
+        entropy = torch.mean(entropies)
+        loss = policy_grad + self.H*entropy
+        return loss, entropy
+    
+########################################################################################################################
+
+class GeneralA2C(FullSpaceA2C): 
+    """
+    Features:
+    1. Supports automatically full action and state space
+    2. Uses entropy regularization only on main actions
+    3. Uses different networks for same parameters referred to different actions 
+       (see SpatialA2C_v2)
+    """
+    def __init__(self, env, spatial_model, nonspatial_model, spatial_dict, nonspatial_dict, 
+                 n_features, n_channels, gamma=0.99, H=1e-2, n_steps=20, device='cpu'):
+        self.gamma = gamma
+        self.n_steps = n_steps
+        self.H = H
+        self.AC = FullSpatialActorCritic(env, spatial_model, nonspatial_model, spatial_dict, 
+                                         nonspatial_dict, n_features, n_channels)
+        self.device = device 
+        self.AC.to(self.device) 
+        
+    def step(self, state, action_mask):
+        spatial_state = state['spatial']
+        player_state = state['player']
+        spatial_state = torch.from_numpy(spatial_state).float().to(self.device)
+        player_state = torch.from_numpy(player_state).float().to(self.device)
+        action_mask = torch.tensor(action_mask).to(self.device)
+        
+        log_probs, spatial_features, nonspatial_features = self.AC.pi(spatial_state, player_state, action_mask)
+        entropy = self.compute_entropy(log_probs)
+        probs = torch.exp(log_probs)
+        a = Categorical(probs).sample()
+        a = a.detach().cpu().numpy()
+        log_prob = log_probs[range(len(a)), a]
+        
+        args, args_log_prob, args_entropy = self.get_arguments(spatial_features, nonspatial_features, a)
+        log_prob = log_prob + args_log_prob
+
+        # check if it's alright to pass integers as action identifiers
+        #action_id = np.array([self.AC.action_dict[act] for act in a])
+        action = [actions.FunctionCall(a[i], args[i]) for i in range(len(a))]
+        if debug:
+            print("action: ", action)
+        return action, log_prob, torch.mean(entropy)
+    
+    def get_arguments(self, spatial_features, nonspatial_features, action):
+        """
+        1. Loop on actions
+        2. Get arg_names
+        3. Loop on them
+        4. Discriminate between spatial and categorical
+        5. Slice the spatial or nonspatial features selecting the index i along the batch axis, 
+           then add again a fictious batch dimension with .unsqueeze(0)
+        6. Collect the results 
+        7. Stack list of results
+        """
+        ### For every action get the list of arguments and their log prob and entropy ###
+        args, args_log_prob, args_entropy = [], [], []
+        # 1)
+        for i, a in enumerate(action):
+            # default return values if no argument is sampled (like if there was a single value obtained with p=1)
+            arg = []
+            arg_log_prob = torch.tensor([0]).float().to(self.device)
+            entropies = torch.tensor([0]).float().to(self.device)
+            # 2)
+            arg_names = self.AC.act_to_arg_names[a]
+            if len(arg_names) != 0:
+                # 3)
+                for arg_name in arg_names:
+                    # 4)
+                    if self.AC.arguments_type[arg_name] == 'categorical':
+                        # 5)
+                        x = nonspatial_features[i].unsqueeze(0)
+                        arg_sampled, log_prob, log_probs = self.AC.sample_param(x, arg_name)
+                    elif self.AC.arguments_type[arg_name] == 'spatial':
+                        x = spatial_features[i].unsqueeze(0)
+                        arg_sampled, log_prob, log_probs = self.AC.sample_param(x, arg_name)
+                    else:
+                        raise Exception("argument type for "+arg_name+" not understood")  
+                    entropy = self.compute_entropy(log_probs)
+
+                    # 6)
+                    #print("arg_sampled: ", arg_sampled)
+                    #print("arg_sampled[0]: ", arg_sampled[0])
+                    arg.append(arg_sampled[0])
+                    arg_log_prob = arg_log_prob + log_prob 
+                    entropies = entropies + entropy
+            args.append(arg)
+            args_log_prob.append(arg_log_prob) 
+            args_entropy.append(entropies)
+
+        # 7)
+        args_log_prob = torch.stack(args_log_prob, axis=0).squeeze()
+        args_entropy = torch.stack(args_entropy, axis=0).squeeze()
+        return args, args_log_prob, args_entropy
+
+    # Not used
+    def get_arguments_old(self, spatial_features, nonspatial_features, action):
+        """
+        Samples all possible arguments for each sample in the batch, then selects only those that
+        apply to the selected actions and returns a list containing the list of arguments for every 
+        sampled action, the logarithm of the probability of sampling those arguments and the entropy 
+        of their distributions. If an action has more arguments the log probs and the entropies returned
+        are the sum of all those of the single arguments.
+        """
+        ### Sample and store each argument with its log prob and entropy ###
+        results = {}    
+        for arg_name in self.AC.arguments_names_lst:
+            if self.AC.arguments_type[arg_name] == 'categorical':
+                arg_sampled, log_prob, log_probs = self.AC.sample_param(nonspatial_features, arg_name)
+            elif self.AC.arguments_type[arg_name] == 'spatial':
+                arg_sampled, log_prob, log_probs = self.AC.sample_param(spatial_features, arg_name)
+            else:
+                raise Exception("argument type for "+arg_name+" not understood")  
+            entropy = self.compute_entropy(log_probs)
+            results[arg_name] = (arg_sampled, log_prob, entropy)
+           
+        ### For every action get the list of arguments and their log prob and entropy ###
+        args, args_log_prob, args_entropy = [], [], []
+        for i, a in enumerate(action):
+            # default return values if no argument is sampled (like if there was a single value obtained with p=1)
+            arg = []
+            arg_log_prob = torch.tensor([0]).float().to(self.device)
+            entropies = torch.tensor([0]).float().to(self.device)
+            
+            arg_names = self.AC.act_to_arg_names[a]
+            values = list( map(results.get, arg_names) )
+            if len(values) != 0:
+                for j in range(len(values)):
+                    # j is looping on the tuples (arg, log_prob, ent)
+                    # Second index is for accessing tuples items
+                    # i is for the sample index inside the batch
+                    arg.append(list(values[j][0][i]))
+                    arg_log_prob = arg_log_prob + values[j][1][i] # sum log_probs
+                    entropies = entropies + values[j][2][i] # sum entropies
+            args.append(arg)
+            args_log_prob.append(arg_log_prob) 
+            args_entropy.append(entropies)
+            
+        args_log_prob = torch.stack(args_log_prob, axis=0).squeeze()
+        args_entropy = torch.stack(args_entropy, axis=0).squeeze()
+        return args, args_log_prob, args_entropy
+    
+
+########################################################################################################################
+
 class SpatialA2C_MaxEnt(SpatialA2C_v2):
     """
     Maximum Entropy Reinforcement Learning objective following Schulman et al. 
@@ -382,6 +655,8 @@ class SpatialA2C_MaxEnt(SpatialA2C_v2):
         return entropy
     
     def compute_ac_loss(self, rewards, log_probs, entropies, states, done, bootstrap, trg_states): 
+        assert states.shape == trg_states.shape, \
+            ("Expected states and trg_states with same shape ", states.shape, trg_states.shape)
         # merge batch and episode dimensions
         old_states = torch.tensor(states).float().to(self.device).reshape((-1,)+states.shape[2:])
         entropies = torch.stack(entropies, axis=0).transpose(1,0).to(self.device)
@@ -390,11 +665,11 @@ class SpatialA2C_MaxEnt(SpatialA2C_v2):
             # Use as V target the mean of 1-step to n-step V targets
             V_trg = []
             for n in range(1, self.n_steps + 1):
-                n_step_V_trg = self.compute_n_step_V_trg(n, rewards, done, bootstrap, states, entropies)
+                n_step_V_trg = self.compute_n_step_V_trg(n, rewards, done, bootstrap, trg_states, entropies)
                 V_trg.append(n_step_V_trg)
             V_trg = torch.mean(torch.stack(V_trg, axis=0), axis=0)
         else:
-            V_trg = self.compute_n_step_V_trg(self.n_steps, rewards, done, bootstrap, states, entropies)
+            V_trg = self.compute_n_step_V_trg(self.n_steps, rewards, done, bootstrap, trg_states, entropies)
             
         ### Wrap variables into tensors - merge batch and episode dimensions ###    
         log_probs = torch.stack(log_probs).to(self.device).transpose(1,0).reshape(-1)
@@ -481,6 +756,8 @@ class SpatialA2C_MaxEnt(SpatialA2C_v2):
         t_n_steps_mask_b = torch.tensor(n_steps_mask_b).float().to(self.device)
         n_steps_r = torch.sum(Gamma*rewards_repeated*t_episode_mask*t_n_steps_mask_b, axis=2)/Gamma
         return n_steps_r, episode_mask, n_steps_mask_b
+
+########################################################################################################################
     
 class SpatialA2C_MaxEnt_v2(SpatialA2C_v2):
     """
@@ -529,6 +806,8 @@ class SpatialA2C_MaxEnt_v2(SpatialA2C_v2):
         return entropy
     
     def compute_ac_loss(self, rewards, log_probs, main_log_prob, states, done, bootstrap, trg_states): 
+        assert states.shape == trg_states.shape, \
+            ("Expected states and trg_states with same shape ", states.shape, trg_states.shape)
         # merge batch and episode dimensions
         old_states = torch.tensor(states).float().to(self.device).reshape((-1,)+states.shape[2:])
         main_log_prob = torch.stack(main_log_prob).to(self.device).transpose(1,0)
@@ -537,11 +816,11 @@ class SpatialA2C_MaxEnt_v2(SpatialA2C_v2):
             # Use as V target the mean of 1-step to n-step V targets
             V_trg = []
             for n in range(1, self.n_steps + 1):
-                n_step_V_trg = self.compute_n_step_V_trg(n, rewards, done, bootstrap, states, main_log_prob)
+                n_step_V_trg = self.compute_n_step_V_trg(n, rewards, done, bootstrap, trg_states, main_log_prob)
                 V_trg.append(n_step_V_trg)
             V_trg = torch.mean(torch.stack(V_trg, axis=0), axis=0)
         else:
-            V_trg = self.compute_n_step_V_trg(self.n_steps, rewards, done, bootstrap, states, main_log_prob)
+            V_trg = self.compute_n_step_V_trg(self.n_steps, rewards, done, bootstrap, trg_states, main_log_prob)
             
         ### Wrap variables into tensors - merge batch and episode dimensions ###    
         log_probs = torch.stack(log_probs).to(self.device).transpose(1,0).reshape(-1)
@@ -628,7 +907,9 @@ class SpatialA2C_MaxEnt_v2(SpatialA2C_v2):
         t_n_steps_mask_b = torch.tensor(n_steps_mask_b).float().to(self.device)
         n_steps_r = torch.sum(Gamma*rewards_repeated*t_episode_mask*t_n_steps_mask_b, axis=2)/Gamma
         return n_steps_r, episode_mask, n_steps_mask_b
-    
+
+########################################################################################################################
+
 class SpatialA2C_v1(SpatialA2C):
     """
     Differences from SpatialA2C:
@@ -748,6 +1029,8 @@ class SpatialA2C_v1(SpatialA2C):
         """
         return torch.cat([nonspatial_repr, embedded_action], dim=1)
     
+########################################################################################################################
+
 class SpatialA2C_v3(SpatialA2C):
     """
     Differences from SpatialA2C_v1:
@@ -852,3 +1135,5 @@ class SpatialA2C_v3(SpatialA2C):
         Concatenate them so that the result is of shape (B, n_features+embedd_dim)
         """
         return torch.cat([nonspatial_repr, embedded_action], dim=1)
+
+########################################################################################################################

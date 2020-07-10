@@ -41,6 +41,8 @@ class SharedCritic(nn.Module):
         V = self.net(shared_repr)
         return V
     
+########################################################################################################################
+
 class SpatialActorCritic(nn.Module):
     """
     Used in SpatialA2C
@@ -119,6 +121,8 @@ class SpatialActorCritic(nn.Module):
         """
         return self.arguments_networks[arg_name](state_rep)
 
+########################################################################################################################
+
 class SpatialActorCritic_v1(SpatialActorCritic):
     """
     Used in SpatialActorCritic_v1
@@ -160,6 +164,8 @@ class SpatialActorCritic_v1(SpatialActorCritic):
         
         return
     
+########################################################################################################################
+
 class SpatialActorCritic_v2(SpatialActorCritic):
     """
     Used in SpatialA2C_v2, SpatialA2C_MaxEnt and SpatialA2C_MaxEnt_v2 - compatible with SpatialA2C too
@@ -250,10 +256,12 @@ class SpatialActorCritic_v3(SpatialActorCritic):
         nonspatial_features otherwise.
         """
         return self.arguments_networks[arg_name](*args)
-    
+
+########################################################################################################################
+
 class SpatialActorCritic_v4(SpatialActorCritic_v2):
     """
-    Used in SpatialA2C_v2, SpatialA2C_MaxEnt and SpatialA2C_MaxEnt_v2
+    Used in FullSpaceA2C
     """
     def __init__(self, action_space, env, spatial_model, nonspatial_model, spatial_dict, nonspatial_dict, 
                  n_features, n_channels, action_dict=None):
@@ -273,3 +281,87 @@ class SpatialActorCritic_v4(SpatialActorCritic_v2):
         nonspatial_features = self.nonspatial_features_net(spatial_features)
         V = self.critic(nonspatial_features)
         return V
+    
+########################################################################################################################
+
+class FullSpatialActorCritic(nn.Module):
+    """
+    Uses full action and state space.
+    """
+    def __init__(self, env, spatial_model, nonspatial_model, spatial_dict, nonspatial_dict, 
+                 n_features, n_channels):
+        super(FullSpatialActorCritic, self).__init__()
+        
+        # Environment variables
+        self.screen_res = env.observation_spec()[0]['feature_screen'][1:]
+        self.all_actions = env.action_spec()[0][1]
+        self.all_arguments = env.action_spec()[0][0]
+        self.action_space = len(self.all_actions)
+        
+        # Useful HyperParameters as attributes
+        self.n_features = n_features
+        self.n_channels = n_channels
+        
+        # Networks
+        self.spatial_features_net = spatial_model(**spatial_dict)
+        self.nonspatial_features_net = nonspatial_model(**nonspatial_dict) 
+        self.actor = SharedActor(self.action_space, n_features)
+        self.critic = SharedCritic(n_features)
+        self._init_params_nets()
+    
+    def _init_params_nets(self):
+        arguments_networks = {}
+        self.arguments_names_lst = []
+        self.arguments_type = {}
+        self.act_to_arg_names = {}
+        
+        for a in range(self.action_space):
+            # access proper action object with more info
+            action = self.all_actions[a] 
+            if debug:
+                print("Action: ", a, action)
+                print("Action.name: ", action.name)
+            args = action.args
+            self.act_to_arg_names[a] = [str(action.name)+"/"+arg.name for arg in args]
+            for arg in args:
+                arg_name = str(action.name)+"/"+arg.name
+                self.arguments_names_lst.append(arg_name) # store arg_name for future use
+                if debug: 
+                    print('\narg.name: ', arg.name)
+                    print('arg_name: ', arg_name)
+
+                size = self.all_arguments[arg.id].sizes
+                if debug: print('size: ', size)
+                if len(size) == 1:
+                    if debug: 
+                        print("Init CategoricalNet for "+arg_name+' argument')
+                    arguments_networks[arg_name] = CategoricalNet(self.n_features, size[0]) 
+                    self.arguments_type[arg_name] = 'categorical'
+                else:
+                    if debug: print("Init SpatialNet for "+arg_name+' argument')
+                    arguments_networks[arg_name] = SpatialParameters(self.n_channels, size[0]) 
+                    self.arguments_type[arg_name] = 'spatial'
+                    
+        self.arguments_networks = nn.ModuleDict(arguments_networks)
+        
+        return
+        
+    def pi(self, spatial_state, player_state, mask):
+        spatial_features = self.spatial_features_net(spatial_state, player_state)
+        nonspatial_features = self.nonspatial_features_net(spatial_features)
+        logits = self.actor(nonspatial_features) 
+        log_probs = F.log_softmax(logits.masked_fill((mask).bool(), float('-inf')), dim=-1) 
+        return log_probs, spatial_features, nonspatial_features
+    
+    def V_critic(self, spatial_state, player_state):
+        spatial_features = self.spatial_features_net(spatial_state, player_state)
+        nonspatial_features = self.nonspatial_features_net(spatial_features)
+        V = self.critic(nonspatial_features)
+        return V
+    
+    def sample_param(self, state_rep, arg_name):
+        """
+        Takes as input spatial_features if it's a spatial parameter,
+        nonspatial_features otherwise.
+        """
+        return self.arguments_networks[arg_name](state_rep)
