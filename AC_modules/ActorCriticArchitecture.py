@@ -257,6 +257,7 @@ class SpatialActorCritic_v3(SpatialActorCritic):
         """
         return self.arguments_networks[arg_name](*args)
 
+
 ########################################################################################################################
 
 class SpatialActorCritic_v4(SpatialActorCritic_v2):

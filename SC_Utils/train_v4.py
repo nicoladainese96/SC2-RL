@@ -1,7 +1,6 @@
 """
 Full action and state space supported.
 """
-
 import torch
 import torch.multiprocessing as mp
 import numpy as np
@@ -13,6 +12,7 @@ import os
 import sys
 sys.path.insert(0, "../")
 from SC_Utils.game_utils import FullObsProcesser
+
 from SC_Utils.A2C_inspection_v2 import *
 from SC_Utils.train_MaxEnt import gen_PID, init_game, reset_and_skip_first_frame
 
@@ -53,6 +53,7 @@ def merge_screen_and_minimap(state_dict):
     return state, player              
 
 def worker(worker_id, master_end, worker_end, game_params, map_name, obs_proc_params, n_actions):
+
     master_end.close()  # Forbid worker to use the master end for messaging
     np.random.seed() # sets random seed for the environment
     env = init_game(game_params, map_name, random_seed=np.random.randint(10000))
@@ -93,7 +94,7 @@ def worker(worker_id, master_end, worker_end, game_params, map_name, obs_proc_pa
             state = merge_screen_and_minimap(state_dict) # state now is a tuple
             available_actions = obs[0].observation.available_actions
             action_mask = get_action_mask(available_actions, n_actions)
-            
+          
             worker_end.send((state, action_mask))
         elif cmd == 'close':
             worker_end.close()
@@ -164,6 +165,7 @@ class ParallelEnv:
         
 # Ok untill here
 def train_batched_A2C(agent, game_params, map_name, lr, n_train_processes, max_train_steps, 
+
                       unroll_length, obs_proc_params, 
                       test_interval=100, num_tests=5, inspection_interval=120000, save_path=None):
     if save_path is None:
@@ -250,6 +252,7 @@ def train_batched_A2C(agent, game_params, map_name, lr, n_train_processes, max_t
     
     losses = dict(critic_losses=critic_losses, actor_losses=actor_losses, entropies=entropy_losses)
     return score, losses, agent, PID
+
 
 def test(step_idx, agent, test_env, process_ID, op, n_actions, num_test, save_path):
     score = 0.0

@@ -105,7 +105,11 @@ def plot_update_curves(d, t_min=0, t_max=-1):
     plot_actor_loss(d, t_min, t_max)
     
 def print_action_info(inspector, d, t):
+<<<<<<< HEAD
     print("\nStep %d - top 5 actions"%t)
+=======
+    print("\nStep %d"%t)
+>>>>>>> a0bc346a83e651c0cbb872d50a7442c0b12fdf33
     for i in inspector.action_dict.keys():
         print("Action "+inspector.action_dict[i].name, '- prob: %.3f'%d['action_distr'][t][0,i])
     print("-"*35)

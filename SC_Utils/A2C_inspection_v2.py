@@ -7,6 +7,7 @@ New features:
 3. Do not store every parameter distribution
 4. Init passing agent instance instead of action_dict and env instance
 """
+
 import torch
 import numpy as np
 from torch.distributions import Categorical
@@ -26,7 +27,6 @@ class InspectionDict():
         self.arguments_names_lst = agent.AC.arguments_names_lst # not sure this one is needed
         self.arguments_type = agent.AC.arguments_type # useful in plotting
         self.act_to_arg_names = agent.AC.act_to_arg_names # useful to get top_5_action_distr
-        
         self.dict = dict(
                         state_traj = [],
                         rewards = [],
@@ -99,11 +99,12 @@ def inspection_step(agent, inspector, state, action_mask):
                 step_dict['top_5_action_distr'][act][arg_name+'_distr'] = p # second nested level
                 
     ### End inspection ###
-    
+   
     args, args_log_prob, args_entropy = agent.get_arguments(spatial_features, nonspatial_features, a)
     step_dict['args'] = args
     
     log_prob = log_prob + args_log_prob
+
     action = [actions.FunctionCall(a[i], args[i]) for i in range(len(a))]
 
     inspector.store_step(step_dict)
