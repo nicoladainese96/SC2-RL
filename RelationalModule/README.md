@@ -1,0 +1,1 @@
+This folder is obsolete. Good implementation in AC_modules. I keep it just for compatibility with the first agents.

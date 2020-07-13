@@ -1,0 +1,14 @@
+*.ipynb_checkpoints
+__pycache__
+backup
+Results/MoveToBeacon/Checkpoints/
+Results/MoveToBeacon/Inspection/
+Results/MoveToBeacon/agent*
+Results/CollectMineralShards/Checkpoints/
+Results/CollectMineralShards/Inspection/
+Results/CollectMineralShards/agent*
+Results/FindAndDefeatZerglings/Checkpoints/
+Results/FindAndDefeatZerglings/Inspection/
+Results/FindAndDefeatZerglings/agent*
+
+
