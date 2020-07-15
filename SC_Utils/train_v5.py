@@ -1,8 +1,13 @@
 """
-Full action and state space supported.
+Version used for parallel parameters sampling
+Main changes:
+- get_action_mask from action_table instead of action_dict
 """
+
 import torch
 import torch.multiprocessing as mp
+import matplotlib.pyplot as plt
+import time
 import numpy as np
 import string
 import random
@@ -12,48 +17,28 @@ import os
 import sys
 sys.path.insert(0, "../")
 from SC_Utils.game_utils import FullObsProcesser
-
-from SC_Utils.A2C_inspection_v2 import *
+from SC_Utils.A2C_inspection import *
+# Various versions have different functions
 from SC_Utils.train_v2 import gen_PID, init_game
 from SC_Utils.train_v3 import reset_and_skip_first_frame
+from SC_Utils.train_v4 import merge_screen_and_minimap # handles also player info
+
+from pysc2.env import sc2_env
+from pysc2.lib import actions
 
 debug=False
-inspection=True 
+inspection=False
 
-def get_action_mask(available_actions, n_actions):
+def get_action_mask(available_actions, action_table):
     """
-    Creates a mask of length n_actions with zeros (negated True casted to float) 
+    Creates a mask of length action_table with zeros (negated True casted to float) 
     in the positions of available actions and ones (negated False casted to float) 
     in the other positions. 
     """
-    action_mask = ~np.array([a in available_actions for a in range(n_actions)])
+    action_mask = ~np.array([a in available_actions for a in action_table])
     return action_mask
 
-def merge_screen_and_minimap(state_dict):
-    """
-    Returns a tuple (state, player), where
-    state = (screen+minimap channels, res, res) # no batch dim
-    player = (player_features,) # no batch dim
-    """
-    screen = state_dict['screen_layers']
-    minimap = state_dict['minimap_layers']
-    player = state_dict['player_features']
-    if len(minimap) > 0:
-        try:
-            assert screen.shape[-2:] == minimap.shape[-2:], 'different resolutions'
-        except:
-            print("Shape mismatch between screen and minimap. They must have the same resolution.")
-            print("Screen resolution: ", screen.shape[-2:])
-            print("Minimap resolution: ", minimap.shape[-2:])
-
-        state = np.concatenate([screen, minimap])
-    elif len(minimap)==0 and len(screen) >0:
-        state = screen
-    else:
-        raise Exception("Both screen and minimap seem to have 0 layers.")
-    return state, player              
-
-def worker(worker_id, master_end, worker_end, game_params, map_name, obs_proc_params, n_actions):
+def worker(worker_id, master_end, worker_end, game_params, map_name, obs_proc_params, action_table):
 
     master_end.close()  # Forbid worker to use the master end for messaging
     np.random.seed() # sets random seed for the environment
@@ -86,7 +71,7 @@ def worker(worker_id, master_end, worker_end, game_params, map_name, obs_proc_pa
                 state = state_trg
                 
             available_actions = obs[0].observation.available_actions
-            action_mask = get_action_mask(available_actions, n_actions)
+            action_mask = get_action_mask(available_actions, action_table)
             worker_end.send((state, reward, done, bootstrap, state_trg, action_mask))
             
         elif cmd == 'reset':
@@ -94,7 +79,7 @@ def worker(worker_id, master_end, worker_end, game_params, map_name, obs_proc_pa
             state_dict, _ = op.get_state(obs) # returns (state_dict, names_dict)
             state = merge_screen_and_minimap(state_dict) # state now is a tuple
             available_actions = obs[0].observation.available_actions
-            action_mask = get_action_mask(available_actions, n_actions)
+            action_mask = get_action_mask(available_actions, action_table)
           
             worker_end.send((state, action_mask))
         elif cmd == 'close':
@@ -104,7 +89,7 @@ def worker(worker_id, master_end, worker_end, game_params, map_name, obs_proc_pa
             raise NotImplementedError
 
 class ParallelEnv:
-    def __init__(self, n_train_processes, game_params, map_name, obs_proc_params, n_actions):
+    def __init__(self, n_train_processes, game_params, map_name, obs_proc_params, action_table):
         self.nenvs = n_train_processes
         self.waiting = False
         self.closed = False
@@ -116,7 +101,7 @@ class ParallelEnv:
         for worker_id, (master_end, worker_end) in enumerate(zip(master_ends, worker_ends)):
             p = mp.Process(target=worker,
                            args=(worker_id, master_end, worker_end, game_params, 
-                                 map_name, obs_proc_params, n_actions))
+                                 map_name, obs_proc_params, action_table))
             p.daemon = True
             p.start()
             self.workers.append(p)
@@ -166,7 +151,6 @@ class ParallelEnv:
         
 # Ok untill here
 def train_batched_A2C(agent, game_params, map_name, lr, n_train_processes, max_train_steps, 
-
                       unroll_length, obs_proc_params, 
                       test_interval=100, num_tests=5, inspection_interval=120000, save_path=None):
     if save_path is None:
@@ -174,9 +158,10 @@ def train_batched_A2C(agent, game_params, map_name, lr, n_train_processes, max_t
     replay_dict = dict(save_replay_episodes=num_tests,
                        replay_dir='Replays/',
                        replay_prefix='A2C_'+map_name)
+    action_table = agent.AC.action_table
     test_env = init_game(game_params, map_name, **replay_dict) # save just test episodes
     op = FullObsProcesser(**obs_proc_params)
-    envs = ParallelEnv(n_train_processes, game_params, map_name, obs_proc_params, agent.AC.action_space)
+    envs = ParallelEnv(n_train_processes, game_params, map_name, obs_proc_params, action_table)
 
     optimizer = torch.optim.Adam(agent.AC.parameters(), lr=lr)
     PID = gen_PID()
@@ -236,10 +221,10 @@ def train_batched_A2C(agent, game_params, map_name, lr, n_train_processes, max_t
             if step_idx // test_interval == 1:
                 with open(save_path+'/Logging/'+PID+'.txt', 'a+') as f:
                     print("#Steps,score", file=f)
-            avg_score = test(step_idx, agent, test_env, PID, op, agent.AC.action_space, num_tests, save_path)
+            avg_score = test(step_idx, agent, test_env, PID, op, action_table, num_tests, save_path)
             score.append(avg_score)
         if inspection and (step_idx%inspection_interval==0):
-            inspector = inspection_test(step_idx, agent, test_env, PID, op, agent.AC.action_space)
+            inspector = inspection_test(step_idx, agent, test_env, PID, op, action_table)
             # save episode for inspection and model weights at that point
             if not os.path.isdir(save_path):
                 os.system('mkdir '+save_path)
@@ -255,7 +240,7 @@ def train_batched_A2C(agent, game_params, map_name, lr, n_train_processes, max_t
     return score, losses, agent, PID
 
 
-def test(step_idx, agent, test_env, process_ID, op, n_actions, num_test, save_path):
+def test(step_idx, agent, test_env, process_ID, op, action_table, num_test, save_path):
     score = 0.0
     done = False
             
@@ -268,7 +253,7 @@ def test(step_idx, agent, test_env, process_ID, op, n_actions, num_test, save_pa
         for k in s.keys():
             s[k] = s[k][np.newaxis, ...] # add batch dim
         available_actions = obs[0].observation.available_actions
-        a_mask = get_action_mask(available_actions, n_actions)[np.newaxis, ...] # add batch dim
+        a_mask = get_action_mask(available_actions, action_table)[np.newaxis, ...] # add batch dim
         
         while not done:
             a, log_prob, probs = agent.step(s, a_mask)
@@ -281,7 +266,7 @@ def test(step_idx, agent, test_env, process_ID, op, n_actions, num_test, save_pa
             reward = obs[0].reward
             done = obs[0].last()
             available_actions = obs[0].observation.available_actions
-            a_mask = get_action_mask(available_actions, n_actions)[np.newaxis, ...] # add batch dim
+            a_mask = get_action_mask(available_actions, action_table)[np.newaxis, ...] # add batch dim
             
             s = s_prime
             score += reward
@@ -291,7 +276,7 @@ def test(step_idx, agent, test_env, process_ID, op, n_actions, num_test, save_pa
         print(f"{step_idx},{score/num_test:.1f}", file=f)
     return score/num_test
 
-def inspection_test(step_idx, agent, test_env, process_ID, op, n_actions):
+def inspection_test(step_idx, agent, test_env, process_ID, op, action_table):
     inspector = InspectionDict(step_idx, process_ID, agent)
     
     obs = reset_and_skip_first_frame(test_env)
@@ -301,7 +286,7 @@ def inspection_test(step_idx, agent, test_env, process_ID, op, n_actions):
     for k in s.keys():
         s[k] = s[k][np.newaxis, ...] # add batch dim
     available_actions = obs[0].observation.available_actions
-    a_mask = get_action_mask(available_actions, n_actions)[np.newaxis, ...] # add batch dim
+    a_mask = get_action_mask(available_actions, action_table)[np.newaxis, ...] # add batch dim
     
     done = False
     G = 0.0
@@ -322,7 +307,7 @@ def inspection_test(step_idx, agent, test_env, process_ID, op, n_actions):
         reward = obs[0].reward
         done = obs[0].last()
         available_actions = obs[0].observation.available_actions
-        a_mask = get_action_mask(available_actions, n_actions)[np.newaxis, ...] # add batch dim
+        a_mask = get_action_mask(available_actions, action_table)[np.newaxis, ...] # add batch dim
         if done:
             bootstrap = True
         else:

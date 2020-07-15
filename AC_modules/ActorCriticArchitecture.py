@@ -297,7 +297,7 @@ class FullSpatialActorCritic(nn.Module):
         self.screen_res = env.observation_spec()[0]['feature_screen'][1:]
         self.all_actions = env.action_spec()[0][1]
         self.all_arguments = env.action_spec()[0][0]
-        self.action_space = len(self.all_actions)
+        self.action_space = len(self.all_actions) #573
         
         # Useful HyperParameters as attributes
         self.n_features = n_features
@@ -312,7 +312,7 @@ class FullSpatialActorCritic(nn.Module):
     
     def _init_params_nets(self):
         arguments_networks = {}
-        self.arguments_names_lst = []
+        self.arguments_names_lst = [] #750
         self.arguments_type = {}
         self.act_to_arg_names = {}
         
@@ -323,7 +323,7 @@ class FullSpatialActorCritic(nn.Module):
                 print("Action: ", a, action)
                 print("Action.name: ", action.name)
             args = action.args
-            self.act_to_arg_names[a] = [str(action.name)+"/"+arg.name for arg in args]
+            self.act_to_arg_names[a] = [str(action.name)+"/"+arg.name for arg in args] 
             for arg in args:
                 arg_name = str(action.name)+"/"+arg.name
                 self.arguments_names_lst.append(arg_name) # store arg_name for future use

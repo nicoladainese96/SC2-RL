@@ -552,10 +552,17 @@ class GeneralA2C(FullSpaceA2C):
     # Not used
     def get_arguments_old(self, spatial_features, nonspatial_features, action):
         """
-        Samples all possible arguments for each sample in the batch, then selects only those that
-        apply to the selected actions and returns a list containing the list of arguments for every 
-        sampled action, the logarithm of the probability of sampling those arguments and the entropy 
-        of their distributions. If an action has more arguments the log probs and the entropies returned
+        1) Samples all possible arguments for each sample in the batch
+        2) Saves them together with their log prob and their entropy
+        2) Selects only those arguments that apply to the selected actions (loop on batch dimension)
+        3) Returns a list containing: 
+            - the list of arguments for every sampled action, 
+            - the logarithm of the probability of sampling those arguments and 
+            - the entropy of their distributions. 
+
+        Notes
+        -----
+        If an action has more arguments the log probs and the entropies returned
         are the sum of all those of the single arguments.
         """
         ### Sample and store each argument with its log prob and entropy ###

@@ -12,61 +12,14 @@ import sys
 sys.path.insert(0, "../")
 from SC_Utils.game_utils import ObsProcesser
 from SC_Utils.A2C_inspection_MaxEnt_v2 import *
+from SC_Utils.train_v2 import gen_PID, get_action_mask, merge_screen_and_minimap, init_game
+from SC_Utils.train_v3 import reset_and_skip_first_frame
 
 from pysc2.env import sc2_env
 from pysc2.lib import actions
 
 debug=False
 inspection=True
-
-def gen_PID():
-    ID = ''.join([random.choice(string.ascii_letters) for _ in range(4)])
-    ID = ID.upper()
-    return ID
-
-def get_action_mask(available_actions, action_dict):
-    action_mask = ~np.array([action_dict[i] in available_actions for i in action_dict.keys()])
-    return action_mask
-
-def merge_screen_and_minimap(state_dict):
-    screen = state_dict['screen_layers']
-    minimap = state_dict['minimap_layers']
-    if len(minimap) > 0:
-        try:
-            assert screen.shape[-2:] == minimap.shape[-2:], 'different resolutions'
-        except:
-            print("Shape mismatch between screen and minimap. They must have the same resolution.")
-            print("Screen resolution: ", screen.shape[-2:])
-            print("Minimap resolution: ", minimap.shape[-2:])
-
-        state = np.concatenate([screen, minimap])
-    elif len(minimap)==0 and len(screen) >0:
-        state = screen
-    else:
-        raise Exception("Both screen and minimap seem to have 0 layers.")
-    return state              
-
-def init_game(game_params, map_name='MoveToBeacon', step_multiplier=8, **kwargs):
-
-    race = sc2_env.Race(1) # 1 = terran
-    agent = sc2_env.Agent(race, "Testv0") # NamedTuple [race, agent_name]
-    agent_interface_format = sc2_env.parse_agent_interface_format(**game_params) #AgentInterfaceFormat instance
-
-    game_params = dict(map_name=map_name, 
-                       players=[agent], # use a list even for single player
-                       game_steps_per_episode = 0,
-                       step_mul = step_multiplier,
-                       agent_interface_format=[agent_interface_format] # use a list even for single player
-                       )  
-    env = sc2_env.SC2Env(**game_params, **kwargs)
-
-    return env
-
-def reset_and_skip_first_frame(env):
-    _ = env.reset()
-    action = actions.FunctionCall(actions.FUNCTIONS.no_op.id, [])
-    obs = env.step(actions = [action])
-    return obs
     
 def worker(worker_id, master_end, worker_end, game_params, map_name, obs_proc_params, action_dict):
     master_end.close()  # Forbid worker to use the master end for messaging
