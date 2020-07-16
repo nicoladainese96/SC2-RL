@@ -456,6 +456,42 @@ class FullSpaceA2C(SpatialA2C):
     
 ########################################################################################################################
 
+class FullSpaceA2C_v2(FullSpaceA2C):
+    def __init__(self, env, spatial_model, nonspatial_model, spatial_dict, nonspatial_dict, 
+                 n_features, n_channels, action_names, gamma=0.99, H=1e-2, n_steps=20, device='cpu'):
+        self.gamma = gamma
+        self.n_steps = n_steps
+        self.H = H
+        self.AC = ParallelActorCritic(env, spatial_model, nonspatial_model, spatial_dict, 
+                                     nonspatial_dict, n_features, n_channels, action_names)
+        self.device = device 
+        self.AC.to(self.device) 
+        
+    def step(self, state, action_mask):
+        spatial_state = state['spatial']
+        player_state = state['player']
+        spatial_state = torch.from_numpy(spatial_state).float().to(self.device)
+        player_state = torch.from_numpy(player_state).float().to(self.device)
+        action_mask = torch.tensor(action_mask).to(self.device)
+        
+        log_probs, spatial_features, nonspatial_features = self.AC.pi(spatial_state, player_state, action_mask)
+        entropy = self.compute_entropy(log_probs)
+        probs = torch.exp(log_probs)
+        a = Categorical(probs).sample()
+        a = a.detach().cpu().numpy()
+        log_prob = log_probs[range(len(a)), a]
+        
+        args, args_log_prob = self.AC.sample_params(nonspatial_features, spatial_features, a)
+        assert args_log_prob.shape == log_prob.shape, ("Shape mismatch between arg_log_prob and log_prob ",\
+                                                      args_log_prob.shape, log_prob.shape)
+        log_prob = log_prob + args_log_prob
+        
+        action_id = np.array([self.AC.action_table[act] for act in a])
+        action = [actions.FunctionCall(action_id[i], args[i]) for i in range(len(action_id))]
+
+        return action, log_prob, torch.mean(entropy)
+########################################################################################################################
+
 class GeneralA2C(FullSpaceA2C): 
     """
     Features:

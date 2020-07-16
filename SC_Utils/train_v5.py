@@ -24,10 +24,10 @@ from SC_Utils.train_v3 import reset_and_skip_first_frame
 from SC_Utils.train_v4 import merge_screen_and_minimap # handles also player info
 
 from pysc2.env import sc2_env
-from pysc2.lib import actions
+from pysc2.lib import actions # used somewhere?
 
 debug=False
-inspection=False
+inspection=False # does not work yet
 
 def get_action_mask(available_actions, action_table):
     """
@@ -149,7 +149,6 @@ class ParallelEnv:
             worker.join()
             self.closed = True
         
-# Ok untill here
 def train_batched_A2C(agent, game_params, map_name, lr, n_train_processes, max_train_steps, 
                       unroll_length, obs_proc_params, 
                       test_interval=100, num_tests=5, inspection_interval=120000, save_path=None):
