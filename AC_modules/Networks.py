@@ -320,9 +320,9 @@ class ParallelSpatialParameters(nn.Module):
         index = Categorical(probs).sample()
         y, x = self.unravel_index(index, (self.size,self.size)) # shape (B, n_args)
         if x_first:
-            arg_lst = np.array([[xi.detach().numpy(),yi.detach().numpy()] for xi, yi in zip(x,y)])
+            arg_lst = np.array([[xi.detach().cpu().numpy(),yi.detach().cpu().numpy()] for xi, yi in zip(x,y)])
         else:
-            arg_lst = np.array([[yi.detach().numpy(),xi.detach().numpy()] for xi, yi in zip(x,y)])
+            arg_lst = np.array([[yi.detach().cpu().numpy(),xi.detach().cpu().numpy()] for xi, yi in zip(x,y)])
         arg_lst = arg_lst.transpose(0,2,1)  #shape (batch, n_arguments, [y,x]) (or [x,y])                 
         log_prob = log_probs.view(B*self.n_args, self.size**2)[torch.arange(B*self.n_args), index.flatten()]\
                     .view(B, self.n_args) 
