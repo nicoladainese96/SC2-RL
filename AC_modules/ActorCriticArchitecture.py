@@ -398,9 +398,12 @@ class ParallelActorCritic(nn.Module):
         
         Returns
         -------
-        arg_list: list of lists
+        arg_list: list of batch_size lists, each of them containing the params for an action
+        log_prob: tensor of shape (batch_size,)
         """
         batch_size = actions.shape[0]
+        
+        # Sample all spatial arguments at once for every sample in the batch
         parallel_args, parallel_log_prob, _ = self.spatial_params_net(spatial_features)
        
         # Select only spatial arguments needed by sampled actions

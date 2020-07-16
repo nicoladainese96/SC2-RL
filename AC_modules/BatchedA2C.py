@@ -486,7 +486,7 @@ class FullSpaceA2C_v2(FullSpaceA2C):
                                                       args_log_prob.shape, log_prob.shape)
         log_prob = log_prob + args_log_prob
         
-        action_id = np.array([self.AC.action_table[act] for act in a])
+        action_id = np.array([self.AC.action_table[act] for act in a]) # this can be done without list comprehension
         action = [actions.FunctionCall(action_id[i], args[i]) for i in range(len(action_id))]
 
         return action, log_prob, torch.mean(entropy)

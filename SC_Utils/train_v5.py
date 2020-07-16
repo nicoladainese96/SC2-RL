@@ -17,7 +17,7 @@ import os
 import sys
 sys.path.insert(0, "../")
 from SC_Utils.game_utils import FullObsProcesser
-from SC_Utils.A2C_inspection import *
+from SC_Utils.A2C_inspection_v3 import *
 # Various versions have different functions
 from SC_Utils.train_v2 import gen_PID, init_game
 from SC_Utils.train_v3 import reset_and_skip_first_frame
@@ -27,7 +27,7 @@ from pysc2.env import sc2_env
 from pysc2.lib import actions # used somewhere?
 
 debug=False
-inspection=False # does not work yet
+inspection=True # does not work yet
 
 def get_action_mask(available_actions, action_table):
     """

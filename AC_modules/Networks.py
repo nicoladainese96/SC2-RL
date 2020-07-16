@@ -236,6 +236,15 @@ class CategoricalNet(nn.Module):
 class ParallelCategoricalNet(nn.Module):
 
     def __init__(self, n_features, sizes, n_arguments, hiddens=[256]):
+        """
+        Parameters
+        ----------
+        n_features: int, last dimension of input tensor used in forward
+        sizes: shape (n_arguments,), contains the number of values ranging from 0 to sizes[i]
+            that each argument i can assume. Used for masking out impossible values while sampling
+            all of them together.
+        n_arguments: int, number of categorical arguments to sample
+        """
         super(ParallelCategoricalNet, self).__init__()
         self.sizes = sizes
         self.max_size = sizes.max()
@@ -255,6 +264,16 @@ class ParallelCategoricalNet(nn.Module):
         self.net = nn.Sequential(*layers)
 
     def forward(self, state_rep):
+        """
+        Input
+        -----
+        state_rep: (batch_size, n_features)
+        
+        Returns
+        -------
+        arg: (batch_size, n_args)
+        log_prob: (batch_size, n_args)
+        """
         logits = self.net(state_rep).view(-1, self.n_args, self.max_size) # (batch_size, n_args, max_size)
         # Infer device from spatial_params_net output with parallel_log_prob.is_cuda
         if logits.is_cuda:
@@ -262,7 +281,7 @@ class ParallelCategoricalNet(nn.Module):
         else:
             device = 'cpu'
         self.sizes_mask = self.sizes_mask.to(device)
-        log_probs = F.log_softmax(logits.masked_fill(self.sizes_mask.bool(), float('-inf')), dim=(-1)) # sample all arguments in parallel
+        log_probs = F.log_softmax(logits.masked_fill(self.sizes_mask.bool(), float('-inf')), dim=(-1)) 
         probs = torch.exp(log_probs)
         arg = Categorical(probs).sample() #(batch_size, n_args)
         log_prob = log_probs.view(-1, self.max_size)[torch.arange(arg.shape[0]*arg.shape[1]), arg.flatten()]\
@@ -312,6 +331,17 @@ class ParallelSpatialParameters(nn.Module):
         self.conv = nn.Sequential(nn.Conv2d(n_channels, n_arguments, kernel_size=3, stride=1, padding=1))
     
     def forward(self, x, x_first=True):
+        """
+        Input
+        -----
+        x : (B, n_channels, size, size)
+        
+        Returns
+        -------
+        arg_lst : (B, n_args, 2)
+        log_prob: (B, n_args)
+        log_probs: (B, n_args, size**2) # not used anymore
+        """
         B = x.shape[0]
         x = self.conv(x)
         x = x.reshape((x.shape[0],self.n_args,-1))
@@ -323,13 +353,28 @@ class ParallelSpatialParameters(nn.Module):
             arg_lst = np.array([[xi.detach().cpu().numpy(),yi.detach().cpu().numpy()] for xi, yi in zip(x,y)])
         else:
             arg_lst = np.array([[yi.detach().cpu().numpy(),xi.detach().cpu().numpy()] for xi, yi in zip(x,y)])
-        arg_lst = arg_lst.transpose(0,2,1)  #shape (batch, n_arguments, [y,x]) (or [x,y])                 
+        arg_lst = arg_lst.transpose(0,2,1)  #shape (batch, n_arguments, [x,y]) (or [y,x])                 
         log_prob = log_probs.view(B*self.n_args, self.size**2)[torch.arange(B*self.n_args), index.flatten()]\
                     .view(B, self.n_args) 
         return arg_lst, log_prob, log_probs
     
     @staticmethod
     def unravel_index(index, shape):
+        """
+        Retrieve row and col of a flattened index so that:
+        probs_flat = probs.flatten()
+        index = Categorical(probs_flat).sample()
+        probs_flat[index] == probs[row, col] is True
+        
+        Input
+        -----
+        index: (B, n_args)
+        shape: tuple (size, size)
+        
+        Returns
+        -------
+        rows, cols: (B, n_args), (B, n_args)
+        """
         out = []
         for dim in reversed(shape):
             out.append(index % dim)
