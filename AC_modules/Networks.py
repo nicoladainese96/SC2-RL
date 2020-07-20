@@ -270,6 +270,30 @@ class ParallelCategoricalNet(nn.Module):
         arg = arg.detach().cpu().numpy()
         return arg, log_prob
     
+class CategoricalIMPALA(ParallelCategoricalNet):
+    def __init__(self, n_features, sizes, n_arguments):
+        super(CategoricalIMPALA, self).__init__(n_features, sizes, n_arguments)
+        
+    def forward(self, state_rep):
+        log_probs = self.get_log_probs(state_rep)
+        probs = torch.exp(log_probs)
+        torch_arg = Categorical(probs).sample() #(batch_size, n_args)
+        log_prob = log_probs.view(-1, self.max_size)[torch.arange(torch_arg.shape[0]*torch_arg.shape[1]), torch_arg.flatten()]\
+                    .view(torch_arg.shape[0], torch_arg.shape[1])
+        arg = torch_arg.detach().cpu().numpy()
+        return arg, log_prob, torch_arg
+    
+    def get_log_probs(self, state_rep):
+        logits = self.net(state_rep).view(-1, self.n_args, self.max_size) # (batch_size, n_args, max_size)
+        # Infer device from spatial_params_net output with parallel_log_prob.is_cuda
+        if logits.is_cuda:
+            device = 'cuda' # Assume only 1 GPU device is used 
+        else:
+            device = 'cpu'
+        self.sizes_mask = self.sizes_mask.to(device)
+        log_probs = F.log_softmax(logits.masked_fill(self.sizes_mask.bool(), float('-inf')), dim=(-1)) # sample all arguments in parallel
+        return log_probs
+    
 ### sample spatial parameters from a matrix-like state representation
 
 def unravel_index(index, shape):
@@ -335,6 +359,33 @@ class ParallelSpatialParameters(nn.Module):
             out.append(index % dim)
             index = index // dim
         return tuple(reversed(out))
+    
+class SpatialIMPALA(ParallelSpatialParameters):
+    def __init__(self, n_channels, linear_size, n_arguments):
+        super(SpatialIMPALA, self).__init__(n_channels, linear_size, n_arguments)
+        
+    def forward(self, x, x_first=True):
+        B = x.shape[0]
+        log_probs = self.get_log_probs(x)
+        probs = torch.exp(log_probs)
+        index = Categorical(probs).sample() # shape (B, n_args)
+        # method inherited from ParallelSpatialParameters
+        y, x = self.unravel_index(index, (self.size,self.size)) # both x and y of shape (B, n_args)
+        if x_first:
+            arg_lst = np.array([[xi.detach().numpy(),yi.detach().numpy()] for xi, yi in zip(x,y)])
+        else:
+            arg_lst = np.array([[yi.detach().numpy(),xi.detach().numpy()] for xi, yi in zip(x,y)])
+        arg_lst = arg_lst.transpose(0,2,1)  #shape (batch, n_arguments, [y,x]) (or [x,y])                 
+        log_prob = log_probs.view(B*self.n_args, self.size**2)[torch.arange(B*self.n_args), index.flatten()]\
+                    .view(B, self.n_args) 
+        return arg_lst, log_prob, index
+    
+    def get_log_probs(self, x):
+        """Compute flatten log_probs for all arguments - shape: (batch_size, n_args, size**2)"""
+        x = self.conv(x)
+        x = x.reshape((x.shape[0],self.n_args,-1))
+        log_probs = F.log_softmax(x, dim=(-1))
+        return log_probs
     
 class ConditionedSpatialParameters(nn.Module):
     

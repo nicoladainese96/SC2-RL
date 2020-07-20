@@ -1,6 +1,7 @@
 from pysc2.env import sc2_env
 from pysc2.lib import actions 
 import numpy as np
+import torch
 
 def init_game(game_params, map_name='MoveToBeacon', max_steps=256, step_multiplier=8, **kwargs):
 
@@ -232,3 +233,17 @@ class FullObsProcesser(ObsProcesser):
         screen_channels, minimap_channels = super().get_n_channels()
         player_channels = len(self.useful_indexes)
         return screen_channels, minimap_channels, player_channels
+    
+class IMPALA_ObsProcesser(FullObsProcesser):
+    def __init__(self, action_table, screen_names=[], minimap_names=[], select_all=False):
+        super().__init__(screen_names, minimap_names, select_all)
+        self.action_table = action_table
+        
+    def get_action_mask(self, available_actions, action_table):
+        """
+        Creates a mask of length action_table with zeros (negated True casted to float) 
+        in the positions of available actions and ones (negated False casted to float) 
+        in the other positions. 
+        """
+        action_mask = ~torch.tensor([a in available_actions for a in action_table], dtype=torch.bool)
+        return action_mask
