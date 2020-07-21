@@ -398,9 +398,12 @@ class ParallelActorCritic(nn.Module):
         
         Returns
         -------
-        arg_list: list of lists
+        arg_list: list of batch_size lists, each of them containing the params for an action
+        log_prob: tensor of shape (batch_size,)
         """
         batch_size = actions.shape[0]
+        
+        # Sample all spatial arguments at once for every sample in the batch
         parallel_args, parallel_log_prob, _ = self.spatial_params_net(spatial_features)
        
         # Select only spatial arguments needed by sampled actions
@@ -420,9 +423,9 @@ class ParallelActorCritic(nn.Module):
             device = 'cpu'     
         # for every arg index contains the index of the action that uses that parameter
         main_action_ids = torch.tensor(self.spatial_arg_mask.nonzero()[0]).to(device)
-        sum_log_prob = torch.zeros(batch_size, len(self.action_table)) # (batch_size, action_space)
+        sum_log_prob = torch.zeros(batch_size, len(self.action_table)).float().to(device) # (batch_size, action_space)
         sum_log_prob.index_add_(1, main_action_ids, parallel_log_prob)
-        sampled_actions = torch.tensor(actions) # of shape (batch_size,)
+        sampled_actions = torch.tensor(actions).to(device) # of shape (batch_size,)
         # sum of log_probs of the relevant parameters by
         log_prob = sum_log_prob[torch.arange(batch_size), sampled_actions]
 
@@ -454,9 +457,9 @@ class ParallelActorCritic(nn.Module):
             device = 'cpu'
         # for every arg index contains the index of the action that uses that parameter
         main_action_ids = torch.tensor(self.categorical_arg_mask.nonzero()[0]).to(device)
-        sum_log_prob = torch.zeros(batch_size, len(self.action_table)) # (batch_size, action_space)
+        sum_log_prob = torch.zeros(batch_size, len(self.action_table)).float().to(device) # (batch_size, action_space)
         sum_log_prob.index_add_(1, main_action_ids, parallel_log_prob)
-        sampled_actions = torch.tensor(actions) # of shape (batch_size,)
+        sampled_actions = torch.tensor(actions).to(device) # of shape (batch_size,)
         # sum of log_probs of the relevant parameters by
         log_prob = sum_log_prob[torch.arange(batch_size), sampled_actions]
 

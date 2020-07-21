@@ -1,14 +1,13 @@
 from Utils import utils
-from AC_modules.BatchedA2C import FullSpaceA2C_v2
-from SC_Utils.game_utils import FullObsProcesser
-from SC_Utils.train_v5 import *
+from SC_Utils.game_utils import FullObsProcesser, get_action_dict
+from SC_Utils.train_v4 import *
+from AC_modules.BatchedA2C import GeneralA2C
 import AC_modules.Networks as net
 import torch
 import argparse 
 import os
 import sys
 from absl import flags
-import time
 
 parser = argparse.ArgumentParser(description='A2C for StarCraftII minigames')
 # Game arguments
@@ -21,12 +20,6 @@ parser.add_argument('--screen_names', type=str, nargs='*', help='List of strings
 parser.add_argument('--minimap_names', type=str, nargs='*', help='List of strings containing minimap layers names to use. \
                     Overridden by select_all_layers=True', 
                     default=['visibility_map', 'camera'])
-parser.add_argument('--action_names', '-a_n', type=str, nargs='*', help='List of strings containing action names to use.', 
-                    default= ['move_camera', 'select_point', 'select_rect', 'select_idle_worker', 'select_army', 
-                              'Attack_screen','Attack_minimap', 'Build_Barracks_screen', 'Build_CommandCenter_screen',
-                              'Build_Refinery_screen', 'Build_SupplyDepot_screen','Harvest_Gather_SCV_screen', 
-                              'Harvest_Return_SCV_quick', 'HoldPosition_quick', 'Move_screen', 'Move_minimap',
-                              'Rally_Workers_screen', 'Rally_Workers_minimap','Train_Marine_quick', 'Train_SCV_quick'])
 # Agent arguments
 parser.add_argument('--conv_channels', type=int, help='Number of convolutional channels for screen+minimap output', default=32)
 parser.add_argument('--player_features', type=int, help='Number of features for the player features output', default=16)
@@ -50,7 +43,6 @@ args, unknown_flags = parser.parse_known_args()  # Let argparse parse known flag
 flags.FLAGS(sys.argv[:1] + unknown_flags)  # Let absl.flags parse the rest.
 
 def main():
-    start = time.time()
     # Environment parameters
     RESOLUTION = args.res
     game_params = dict(feature_screen=RESOLUTION, feature_minimap=RESOLUTION, action_space="FEATURES") 
@@ -83,10 +75,10 @@ def main():
     spatial_dict = {"in_channels":in_channels, 'in_player':in_player, 
                     'conv_channels':conv_channels, 'player_features':player_features}
     nonspatial_dict = {'resolution':RESOLUTION, 'kernel_size':3, 'stride':2, 'n_channels':n_channels}
-    print("args.action_names: ", args.action_names)
+
     HPs = dict(gamma=0.99, n_steps=20, H=args.H, 
            spatial_model=spatial_model, nonspatial_model=nonspatial_model,
-           n_features=n_features, n_channels=n_channels, action_names=args.action_names,
+           n_features=n_features, n_channels=n_channels, 
            spatial_dict=spatial_dict, nonspatial_dict=nonspatial_dict)
 
     if torch.cuda.is_available():
@@ -94,7 +86,7 @@ def main():
     else:
         HPs['device'] = 'cpu'
     print("Using device "+HPs['device'])
-    agent = FullSpaceA2C_v2(env=env, **HPs)
+    agent = GeneralA2C(env=env, **HPs)
     env.close()
     
     # Training args
@@ -104,8 +96,7 @@ def main():
                       test_interval = args.test_interval,
                       inspection_interval = args.inspection_interval
                       )
-    print("Training dictionary: ", train_dict)
-    
+
     # Creating paths if not existing
     if not os.path.isdir(args.save_dir):
         os.system("mkdir "+args.save_dir)
@@ -115,12 +106,8 @@ def main():
     results = train_batched_A2C(agent, game_params, map_name, args.lr, 
                             obs_proc_params=obs_proc_params, 
                             save_path=args.save_dir+map_name, **train_dict)
-    
     score, losses, trained_agent, PID = results
     
-    elapsed_time = int((time.time() - start)/60)
-    print("Elapsed time %d min"%elapsed_time)
-    print("Elapsed time %.2f h"%(elapsed_time/60))
     # Save results
     save = True
     keywords = [map_name,
