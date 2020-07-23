@@ -148,7 +148,7 @@ class ParallelEnv:
         for worker in self.workers:
             worker.join()
             self.closed = True
-        
+
 def train_batched_A2C(agent, game_params, map_name, lr, n_train_processes, max_train_steps, 
                       unroll_length, obs_proc_params, 
                       test_interval=100, num_tests=5, inspection_interval=120000, save_path=None):

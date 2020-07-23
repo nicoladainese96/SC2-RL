@@ -14,6 +14,7 @@
 """The environment class for MonoBeast."""
 
 import torch
+import numpy as np
 from pysc2.lib import actions
 
 def merge_screen_and_minimap(state_dict):
@@ -40,14 +41,16 @@ def merge_screen_and_minimap(state_dict):
         raise Exception("Both screen and minimap seem to have 0 layers.")
     return state, player 
 
-# doesn't work, my state is a dict composed by 2 elements
-def _format_state(state):
-    spatial_state = torch.from_numpy(state['spatial']) 
-    player_state = torch.from_numpy(state['player']) 
-    spatial_state.view((1, 1) + spatial_state.shape)
-    return spatial_state.view((1, 1) + spatial_state.shape), \
-           player_state.view((1, 1) + player_state.shape)
-
+def _format_state(spatial_state, player_state):
+    """
+    Returns
+    -------
+    spatial_state: tensor shape (in_channels, res, res)
+    player_state: tensor shape (in_players,)
+    """
+    spatial_state = torch.from_numpy(spatial_state).float()
+    player_state = torch.from_numpy(player_state).float()
+    return spatial_state, player_state
 
 class Environment:
     def __init__(self, env, obs_processer):
@@ -57,18 +60,19 @@ class Environment:
         self.episode_step = None
 
     def reset(self, skip_first=True):
-        obs = env.reset()
+        obs = self.env.reset()
         if skip_first:
             action = actions.FunctionCall(actions.FUNCTIONS.no_op.id, [])
-            obs = env.step(actions = [action])
+            obs = self.env.step(actions = [action])
         return self.unpack_obs(obs) 
     
     def unpack_obs(self, obs):
         state_dict, _ = self.obs_processer.get_state(obs)  # returns (state_dict, names_dict)
-        state = merge_screen_and_minimap(state_dict)
+        spatial_state, player_state = merge_screen_and_minimap(state_dict)
         reward = obs[0].reward
         done = obs[0].last()
-        return state, reward, done
+        action_mask = self.obs_processer.get_action_mask(obs[0].observation.available_actions)
+        return spatial_state, player_state, reward, done, action_mask
     
     def initial(self):
         initial_reward = torch.zeros(1, 1)
@@ -76,9 +80,9 @@ class Environment:
         self.episode_return = torch.zeros(1, 1) # (batch_dim, value) ?
         self.episode_step = torch.zeros(1, 1, dtype=torch.int32)
         initial_done = torch.ones(1, 1, dtype=torch.uint8) # why True instead of False?
-        state, _, _ = self.reset()
-        spatial_state, player_state = _format_state(state)
-        action_mask = self.obs_processer.get_action_mask(obs[0].observation.available_actions)
+        spatial_state, player_state, reward, done, action_mask = self.reset()
+        spatial_state, player_state = _format_state(spatial_state, player_state)
+        
         return dict(
             spatial_state=spatial_state, 
             player_state=player_state,
@@ -102,20 +106,19 @@ class Environment:
         - All state tensors have been already processed by FullObsProcesser
         """
         obs = self.env.step(actions=action) 
-        state, reward, done = self.unpack_obs(obs)
+        spatial_state, player_state, reward, done, action_mask = self.unpack_obs(obs)
         self.episode_step += 1
         self.episode_return += reward
         episode_step = self.episode_step
         episode_return = self.episode_return
         if done:
-            state, _, _ = self.reset()
+            spatial_state, player_state, _, _, action_mask = self.reset()
             self.episode_return = torch.zeros(1, 1)
             self.episode_step = torch.zeros(1, 1, dtype=torch.int32)
 
-        spatial_state, player_state = _format_state(state) 
+        spatial_state, player_state = _format_state(spatial_state, player_state) 
         reward = torch.tensor(reward).view(1, 1)
         done = torch.tensor(done).view(1, 1)
-        action_mask = self.obs_processer.get_action_mask(obs[0].observation.available_actions)
         return dict(
             spatial_state=spatial_state, 
             player_state=player_state,

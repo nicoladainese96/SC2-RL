@@ -239,11 +239,11 @@ class IMPALA_ObsProcesser(FullObsProcesser):
         super().__init__(screen_names, minimap_names, select_all)
         self.action_table = action_table
         
-    def get_action_mask(self, available_actions, action_table):
+    def get_action_mask(self, available_actions):
         """
         Creates a mask of length action_table with zeros (negated True casted to float) 
         in the positions of available actions and ones (negated False casted to float) 
         in the other positions. 
         """
-        action_mask = ~torch.tensor([a in available_actions for a in action_table], dtype=torch.bool)
+        action_mask = ~torch.tensor([a in available_actions for a in self.action_table], dtype=torch.bool)
         return action_mask

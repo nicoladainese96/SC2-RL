@@ -29,7 +29,7 @@ from torch import multiprocessing as mp
 from torch import nn
 from torch.nn import functional as F
 
-from torchbeast import atari_wrappers
+#from torchbeast import atari_wrappers
 from torchbeast.core import environment
 from torchbeast.core import file_writer
 from torchbeast.core import prof
@@ -37,9 +37,11 @@ from torchbeast.core import vtrace
 
 # SC stuff
 from pysc2.env import sc2_env
-from SC_Utils.game_utils import IMPALA_ObsProcesser
+from SC_Utils.game_utils import IMPALA_ObsProcesser, FullObsProcesser
 from AC_modules.IMPALA import IMPALA_AC
+import AC_modules.Networks as net
 import absl 
+import sys
 
 # yapf: disable
 parser = argparse.ArgumentParser(description="PyTorch Scalable Agent for StarCraftII Learning Environment")
@@ -54,6 +56,12 @@ parser.add_argument('--screen_names', type=str, nargs='*', help='List of strings
 parser.add_argument('--minimap_names', type=str, nargs='*', help='List of strings containing minimap layers names to use. \
                     Overridden by select_all_layers=True', 
                     default=['visibility_map', 'camera'])
+parser.add_argument('--action_names', '-a_n', type=str, nargs='*', help='List of strings containing action names to use.', 
+                    default= ['move_camera', 'select_point', 'select_rect', 'select_idle_worker', 'select_army', 
+                              'Attack_screen','Attack_minimap', 'Build_Barracks_screen', 'Build_CommandCenter_screen',
+                              'Build_Refinery_screen', 'Build_SupplyDepot_screen','Harvest_Gather_SCV_screen', 
+                              'Harvest_Return_SCV_quick', 'HoldPosition_quick', 'Move_screen', 'Move_minimap',
+                              'Rally_Workers_screen', 'Rally_Workers_minimap','Train_Marine_quick', 'Train_SCV_quick'])
 # Agent arguments
 parser.add_argument('--conv_channels', type=int, help='Number of convolutional channels for screen+minimap output', default=32)
 parser.add_argument('--player_features', type=int, help='Number of features for the player features output', default=16)
@@ -67,25 +75,25 @@ parser.add_argument("--xpid", default=None,
 # Training settings.
 parser.add_argument("--disable_checkpoint", action="store_true",
                     help="Disable saving checkpoint.")
-parser.add_argument("--savedir", default="~/logs/torchbeast",
+parser.add_argument("--savedir", default="~/Workdir/logs/torchbeast",
                     help="Root dir where experiment data will be saved.")
 parser.add_argument("--num_actors", default=4, type=int, metavar="N",
                     help="Number of actors (default: 4).")
-parser.add_argument("--total_steps", default=100000, type=int, metavar="T",
+parser.add_argument("--total_steps", default=12000, type=int, metavar="T",
                     help="Total environment steps to train for.")
 parser.add_argument("--batch_size", default=8, type=int, metavar="B",
                     help="Learner batch size.")
-parser.add_argument("--unroll_length", default=80, type=int, metavar="T",
+parser.add_argument("--unroll_length", default=60, type=int, metavar="T",
                     help="The unroll length (time dimension).")
 parser.add_argument("--num_buffers", default=None, type=int,
                     metavar="N", help="Number of shared-memory buffers.")
-parser.add_argument("--num_learner_threads", "--num_threads", default=2, type=int,
+parser.add_argument("--num_learner_threads", "--num_threads", default=1, type=int, # old default was 2
                     metavar="N", help="Number learner threads.")
 parser.add_argument("--disable_cuda", action="store_true",
                     help="Disable CUDA.")
 
 # Loss settings.
-parser.add_argument("--entropy_cost", default=0.0006,
+parser.add_argument("--entropy_cost", default=0.001,
                     type=float, help="Entropy cost/multiplier.")
 parser.add_argument("--baseline_cost", default=0.5,
                     type=float, help="Baseline cost/multiplier.")
@@ -96,7 +104,7 @@ parser.add_argument("--reward_clipping", default="abs_one",
                     help="Reward clipping.")
 
 # Optimizer settings.
-parser.add_argument("--learning_rate", default=0.00048,
+parser.add_argument("--learning_rate", default=7e-4,#0.00048,
                     type=float, metavar="LR", help="Learning rate.")
 parser.add_argument("--alpha", default=0.99, type=float,
                     help="RMSProp smoothing constant.")
@@ -118,13 +126,6 @@ logging.basicConfig(
 
 Buffers = typing.Dict[str, typing.List[torch.Tensor]] #??
 
-### Maybe import them from another file ###
-
-def gen_PID():
-    ID = ''.join([random.choice(string.ascii_letters) for _ in range(4)])
-    ID = ID.upper()
-    return ID
-
 def init_game(game_params, map_name='MoveToBeacon', step_multiplier=8, **kwargs):
 
     race = sc2_env.Race(1) # 1 = terran
@@ -141,14 +142,14 @@ def init_game(game_params, map_name='MoveToBeacon', step_multiplier=8, **kwargs)
 
     return env
 
-###
+# ##
 
 def compute_baseline_loss(advantages):
     return 0.5 * torch.sum(advantages ** 2)
 
 def compute_policy_gradient_loss(log_prob, advantages):
     log_prob = log_prob.view_as(advantages)
-    return torch.sum(log_prob * advantages.detach())
+    return - torch.sum(log_prob * advantages.detach())
 
 
 def act(
@@ -168,48 +169,54 @@ def act(
         sc_env = init_game(game_params['env'], flags.map_name, random_seed=seed)
         obs_processer = IMPALA_ObsProcesser(action_table=model.action_table, **game_params['obs_processer'])
         env = environment.Environment(sc_env, obs_processer)
+        # initial rollout starts here
         env_output = env.initial() 
-        agent_output = model.step(env_output)
-        # agent_output: dict(
-        # log_prob=log_prob, 
-        # baseline=baseline, 
-        # action=action, 
-        # entropy=entropy, 
-        # sc2_env_action=sc2_env_action,
-        #categorical_args_indexes=categorical_args_indexes,
-        #spatial_args_indexes=spatial_args_indexes)
-
+        with torch.no_grad():
+            agent_output = model.actor_step(env_output)
+        
         while True:
             index = free_queue.get()
             if index is None:
                 break
 
-            # Write old rollout end. (why?)
+            # Write old rollout end. 
             for key in env_output:
                 buffers[key][index][0, ...] = env_output[key]
             for key in agent_output:
-                if key not in ['sc2_env_action']:
+                if key not in ['sc_env_action']: # no need to save this key on buffers
                     buffers[key][index][0, ...] = agent_output[key]
 
             # Do new rollout.
-            for t in range(game_params['unroll_length']):
+            for t in range(flags.unroll_length):
                 timings.reset()
 
-                with torch.no_grad():
-                    agent_output = model(env_output)
-
-                timings.time("model")
-
-                env_output = env.step(agent_output["sc2_env_action"])
-
+                env_output = env.step(agent_output["sc_env_action"])
+                
                 timings.time("step")
+                
+                with torch.no_grad():
+                    agent_output = model.actor_step(env_output)
+                
+                timings.time("model")
+                
+                #env_output = env.step(agent_output["sc_env_action"])
+
+                #timings.time("step")
 
                 for key in env_output:
                     buffers[key][index][t + 1, ...] = env_output[key]
                 for key in agent_output:
-                    if key not in ['sc2_env_action']:
+                    if key not in ['sc_env_action']: # no need to save this key on buffers
                         buffers[key][index][t + 1, ...] = agent_output[key]
-
+                # env_output will be like
+                # s_{0}, ..., s_{T}
+                # act_mask_{0}, ..., act_mask_{T}
+                # discount_{0}, ..., discount_{T}
+                # r_{-1}, ..., r_{T-1}
+                # agent_output will be like
+                # a_0, ..., a_T with a_t ~ pi(.|s_t)
+                # log_pi(a_0|s_0), ..., log_pi(a_T|s_T)
+                # so the learner can use (s_i, act_mask_i) to predict log_pi_i
                 timings.time("write")
             full_queue.put(index)
 
@@ -254,30 +261,37 @@ def learn(
     model,
     batch,
     optimizer,
-    scheduler,
+    #scheduler,
     lock=threading.Lock(),  # noqa: B008
 ):
     """Performs a learning (optimization) step."""
     with lock:
-        learner_outputs = model.learner_step(batch)
-
+        
+        learner_outputs = model.learner_step(batch) #ok
+        #print("learner_outputs: ", learner_outputs)
+        
         # Take final value function slice for bootstrapping.
-        bootstrap_value = learner_outputs["baseline"][-1]
+        bootstrap_value = learner_outputs["baseline"][-1] # V_learner(s_T)
+        entropy = learner_outputs['entropy']
+        
+        rearranged_batch = {}
+        rearranged_batch['done'] = batch['done'][:-1] # done_{0}, ..., done_{T-1}
+        rearranged_batch['reward'] = batch['reward'][1:] # reward_{0}, ..., reward_{T-1}
+        rearranged_batch['log_prob'] = batch['log_prob'][:-1] # log_prob_{0}, ..., log_prob_{T-1}
+        
+        # gets [log_prob_{0}, ..., log_prob_{T-1}] and [V_{0},...,V_{T-1}]
+        learner_outputs = {key: tensor[:-1] for key, tensor in learner_outputs.items() if key != 'entropy'}
 
-        # Move from obs[t] -> action[t] to action[t] -> obs[t].
-        batch = {key: tensor[1:] for key, tensor in batch.items()}
-        learner_outputs = {key: tensor[:-1] for key, tensor in learner_outputs.items()}
-
-        rewards = batch["reward"]
+        rewards = rearranged_batch["reward"]
         if flags.reward_clipping == "abs_one":
             clipped_rewards = torch.clamp(rewards, -1, 1)
         elif flags.reward_clipping == "none":
             clipped_rewards = rewards
 
-        discounts = (~batch["done"]).float() * flags.discounting
+        discounts = (~rearranged_batch["done"]).float() * flags.discounting
 
         vtrace_returns = vtrace.from_logits(
-            behavior_action_log_probs=batch["log_prob"], # actor
+            behavior_action_log_probs=rearranged_batch["log_prob"], # actor
             target_action_log_probs=learner_outputs["log_prob"], # learner
             discounts=discounts,
             rewards=clipped_rewards,
@@ -285,19 +299,22 @@ def learn(
             bootstrap_value=bootstrap_value, # coming from the learner too
         )
 
+        #print("vtrace_returns.pg_advantages: ", vtrace_returns.pg_advantages) # check if requires grad, it shouldn't
         pg_loss = compute_policy_gradient_loss(
             learner_outputs["log_prob"],
             vtrace_returns.pg_advantages,
         )
+        #print("vtrace_returns.vs: ", vtrace_returns.vs) # check if requires grad, it shouldn't
         baseline_loss = flags.baseline_cost * compute_baseline_loss(
             vtrace_returns.vs - learner_outputs["baseline"]
         )
-        # here I would like to use just the log_prob of the main actions for the entropy regularization
-        entropy_loss = flags.entropy_cost * learner_outputs["entropy"]
+
+        entropy_loss = flags.entropy_cost * entropy
 
         total_loss = pg_loss + baseline_loss + entropy_loss
-
-        episode_returns = batch["episode_return"][batch["done"]]
+        # not every time we get an episode return because the unroll length is shorter than the episode length, 
+        # so not every time batch['done'] contains some True entries
+        episode_returns = batch["episode_return"][batch["done"]] # still to check, might be okay
         stats = {
             "episode_returns": tuple(episode_returns.cpu().numpy()),
             "mean_episode_return": torch.mean(episode_returns).item(),
@@ -311,10 +328,12 @@ def learn(
         total_loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), flags.grad_norm_clipping)
         optimizer.step()
-        scheduler.step()
+        #scheduler.step()
         # similar to A3C; update learner, copy back to actor; 
         # but this updates all actors at the same time or just some of them? 
         # How is the update received? Only at a certain stage or asynchronously?
+        # Consider that everything is executed `with lock:`
+        #print("model.state_dict() after update: ", model.state_dict())
         actor_model.load_state_dict(model.state_dict())
         return stats
 
@@ -322,19 +341,20 @@ def learn(
 def create_buffers(flags, obs_shape, player_shape, num_actions, max_num_spatial_args, max_num_categorical_args) -> Buffers:
     """`flags` must contain unroll_length and num_buffers"""
     T = flags.unroll_length
+    # specs is a dict of dict which containt the keys 'size' and 'dtype'
     specs = dict(
         spatial_state=dict(size=(T + 1, *obs_shape), dtype=torch.float32), 
-        player_state=dict(size=(T + 1, *player_shape), dtype=torch.float32), 
+        player_state=dict(size=(T + 1, player_shape), dtype=torch.float32), 
         action_mask=dict(size=(T + 1, num_actions), dtype=torch.bool), 
         reward=dict(size=(T + 1,), dtype=torch.float32),
         done=dict(size=(T + 1,), dtype=torch.bool),
         episode_return=dict(size=(T + 1,), dtype=torch.float32),
         episode_step=dict(size=(T + 1,), dtype=torch.int32),
         log_prob=dict(size=(T + 1,), dtype=torch.float32),
-        #baseline=dict(size=(T + 1,), dtype=torch.float32),
         main_action=dict(size=(T + 1,), dtype=torch.int64), 
-        categorical_args_indexes=dict(size=(T + 1, max_num_categorical_args), dtype=torch.int64),
-        spatial_args_indexes=dict(size=(T + 1, max_num_spatial_args), dtype=torch.int64),
+        categorical_indexes=dict(size=(T + 1, max_num_categorical_args), dtype=torch.int64),
+        spatial_indexes=dict(size=(T + 1, max_num_spatial_args), dtype=torch.int64),
+        #baseline=dict(size=(T + 1,), dtype=torch.float32),
     )
     buffers: Buffers = {key: [] for key in specs}
     for _ in range(flags.num_buffers):
@@ -408,22 +428,26 @@ def train(flags, game_params):  # pylint: disable=too-many-branches, too-many-st
         actor_processes.append(actor)
 
     # only model loaded into the GPU ?
-    learner_model = IMPALA_AC(env=env, device='cpu', **game_params['HPs']).to(device=flags.device) 
-
+    learner_model = IMPALA_AC(env=env, device='cuda', **game_params['HPs']).to(device=flags.device) 
+    
     # no more Adam
-    optimizer = torch.optim.RMSprop(
+    optimizer = torch.optim.Adam(
         learner_model.parameters(),
-        lr=flags.learning_rate,
-        momentum=flags.momentum,
-        eps=flags.epsilon,
-        alpha=flags.alpha,
+        lr=flags.learning_rate
     )
+    #optimizer = torch.optim.RMSprop(
+    #    learner_model.parameters(),
+    #    lr=flags.learning_rate,
+    #    momentum=flags.momentum,
+    #    eps=flags.epsilon,
+    #    alpha=flags.alpha,
+    #)
 
     def lr_lambda(epoch):
         # linear schedule from 1 to 0 
-        return 1 - min(epoch * T * B, flags.total_steps) / flags.total_steps
+        return 1 - min(epoch * T, flags.total_steps) / flags.total_steps #epoch * T * B if using B steps
 
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    #scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
     logger = logging.getLogger("logfile")
     stat_keys = [
@@ -443,7 +467,7 @@ def train(flags, game_params):  # pylint: disable=too-many-branches, too-many-st
         timings = prof.Timings()
         while step < flags.total_steps:
             timings.reset()
-            batch, agent_state = get_batch(
+            batch = get_batch(
                 flags,
                 free_queue,
                 full_queue,
@@ -451,15 +475,16 @@ def train(flags, game_params):  # pylint: disable=too-many-branches, too-many-st
                 timings,
             )
             stats = learn(
-                flags, model, learner_model, batch, optimizer, scheduler
+                flags, model, learner_model, batch, optimizer#, scheduler
             )
             timings.time("learn")
             with lock:
                 to_log = dict(step=step)
                 to_log.update({k: stats[k] for k in stat_keys})
                 plogger.log(to_log)
-                step += T * B
-
+                step += T #* B # just count the parallel steps 
+    # end batch_and_learn
+    
         if i == 0:
             logging.info("Batch and learn: %s", timings.summary())
 
@@ -482,12 +507,13 @@ def train(flags, game_params):  # pylint: disable=too-many-branches, too-many-st
             {
                 "model_state_dict": model.state_dict(), 
                 "optimizer_state_dict": optimizer.state_dict(),
-                "scheduler_state_dict": scheduler.state_dict(),
+                #"scheduler_state_dict": scheduler.state_dict(),
                 "flags": vars(flags),
             },
             checkpointpath,
         )
-
+    # end checkpoint
+    
     timer = timeit.default_timer
     try:
         last_checkpoint_time = timer()
@@ -533,18 +559,21 @@ def train(flags, game_params):  # pylint: disable=too-many-branches, too-many-st
 
 # this test is thought as a stand-alone, but I prefer go get a test_env and an agent already loaded if possible 
 # also this time it seems that is always working with the forward pass without a batch dimension 
-#(you have to add it manually when needed)
-def test(flags, num_episodes: int = 10):
+# (you have to add it manually when needed)
+
+# not working now
+def test(flags, game_params, num_episodes: int = 10):
     if flags.xpid is None:
-        checkpointpath = "./latest/model.tar"
+        checkpointpath = "/u/94/dainesn1/unix/Workdir/logs/torchbeast/latest/model.tar"
     else:
         checkpointpath = os.path.expandvars(
             os.path.expanduser("%s/%s/%s" % (flags.savedir, flags.xpid, "model.tar"))
         )
 
-    gym_env = create_env(flags) # init env
-    env = environment.Environment(gym_env) # wrap it
-    model = Net(gym_env.observation_space.shape, gym_env.action_space.n) # init model
+    sc_env = init_game(game_params['env'], flags.map_name)
+    model = IMPALA_AC(env=sc_env, device='cpu', **game_params['HPs']) # let's use cpu as default for test
+    obs_processer = IMPALA_ObsProcesser(action_table=model.action_table, **game_params['obs_processer'])
+    env = environment.Environment(sc_env, obs_processer)
     model.eval() # disable dropout
     checkpoint = torch.load(checkpointpath, map_location="cpu")
     model.load_state_dict(checkpoint["model_state_dict"]) 
@@ -553,11 +582,9 @@ def test(flags, num_episodes: int = 10):
     returns = []
 
     while len(returns) < num_episodes:
-        if flags.mode == "test_render": # remove this
-            env.gym_env.render()
-        agent_outputs = model(observation)
-        policy_outputs, _ = agent_outputs
-        observation = env.step(policy_outputs["action"])
+        with torch.no_grad():
+            agent_outputs = model.actor_step(observation)
+        observation = env.step(agent_outputs["sc_env_action"])
         if observation["done"].item():
             returns.append(observation["episode_return"].item())
             logging.info(
@@ -569,99 +596,6 @@ def test(flags, num_episodes: int = 10):
     logging.info(
         "Average returns over %i steps: %.1f", num_episodes, sum(returns) / len(returns)
     )
-
-### Just focus on the in/out format of the forward method ###
-class AtariNet(nn.Module):
-    def __init__(self, observation_shape, num_actions, use_lstm=False):
-        super(AtariNet, self).__init__()
-        self.observation_shape = observation_shape
-        self.num_actions = num_actions
-
-        # Feature extraction.
-        self.conv1 = nn.Conv2d(
-            in_channels=self.observation_shape[0],
-            out_channels=32,
-            kernel_size=8,
-            stride=4,
-        )
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
-        self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
-
-        # Fully connected layer.
-        self.fc = nn.Linear(3136, 512)
-
-        # FC output size + one-hot of last action + last reward.
-        core_output_size = self.fc.out_features + num_actions + 1
-
-        self.use_lstm = use_lstm
-        if use_lstm:
-            self.core = nn.LSTM(core_output_size, core_output_size, 2)
-
-        self.policy = nn.Linear(core_output_size, self.num_actions)
-        self.baseline = nn.Linear(core_output_size, 1)
-
-    def initial_state(self, batch_size):
-        if not self.use_lstm:
-            return tuple()
-        return tuple(
-            torch.zeros(self.core.num_layers, batch_size, self.core.hidden_size)
-            for _ in range(2)
-        )
-
-    def forward(self, inputs, core_state=()):
-        x = inputs["frame"]  # [T, B, C, H, W].
-        T, B, *_ = x.shape
-        x = torch.flatten(x, 0, 1)  # Merge time and batch.
-        x = x.float() / 255.0
-        x = F.relu(self.conv1(x))
-        x = F.relu(self.conv2(x))
-        x = F.relu(self.conv3(x))
-        x = x.view(T * B, -1)
-        x = F.relu(self.fc(x))
-
-        one_hot_last_action = F.one_hot(
-            inputs["last_action"].view(T * B), self.num_actions
-        ).float()
-        clipped_reward = torch.clamp(inputs["reward"], -1, 1).view(T * B, 1)
-        core_input = torch.cat([x, clipped_reward, one_hot_last_action], dim=-1)
-
-        if self.use_lstm:
-            core_input = core_input.view(T, B, -1)
-            core_output_list = []
-            notdone = (~inputs["done"]).float()
-            for input, nd in zip(core_input.unbind(), notdone.unbind()):
-                # Reset core state to zero whenever an episode ended.
-                # Make `done` broadcastable with (num_layers, B, hidden_size)
-                # states:
-                nd = nd.view(1, -1, 1)
-                core_state = tuple(nd * s for s in core_state)
-                output, core_state = self.core(input.unsqueeze(0), core_state)
-                core_output_list.append(output)
-            core_output = torch.flatten(torch.cat(core_output_list), 0, 1)
-        else:
-            core_output = core_input
-            core_state = tuple()
-
-        policy_logits = self.policy(core_output)
-        baseline = self.baseline(core_output)
-
-        if self.training:
-            action = torch.multinomial(F.softmax(policy_logits, dim=1), num_samples=1)
-        else:
-            # Don't sample when testing.
-            action = torch.argmax(policy_logits, dim=1)
-
-        policy_logits = policy_logits.view(T, B, self.num_actions)
-        baseline = baseline.view(T, B)
-        action = action.view(T, B)
-
-        return (
-            dict(policy_logits=policy_logits, baseline=baseline, action=action),
-            core_state,
-        )
-
-
-Net = AtariNet
 
 # here take inspiration from run.py to define all HPs (e.g. not only flags)
 # also it would be better to have training with testing inside it, as I usually do
@@ -702,17 +636,22 @@ def main(flags):
     nonspatial_dict = {'resolution':RESOLUTION, 'kernel_size':3, 'stride':2, 'n_channels':n_channels}
 
     HPs = dict(spatial_model=spatial_model, nonspatial_model=nonspatial_model,
-           n_features=n_features, n_channels=n_channels, 
+           n_features=n_features, n_channels=n_channels, action_names=flags.action_names,
            spatial_dict=spatial_dict, nonspatial_dict=nonspatial_dict)
     game_params['HPs'] = HPs
     
     if flags.mode == "train":
         train(flags, game_params)
     else:
-        test(flags)
+        test(flags, game_params)
 
 
 if __name__ == "__main__":
+    start = time.time()
     flags, unknown_flags = parser.parse_known_args()  # Let argparse parse known flags from sys.argv.
     absl.flags.FLAGS(sys.argv[:1] + unknown_flags)  # Let absl.flags parse the rest.
     main(flags)
+    elapsed_time = time.time() - start
+    print("Elapsed time: %.2f min"%(elapsed_time/60) )
+
+
