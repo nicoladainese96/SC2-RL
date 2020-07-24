@@ -75,7 +75,7 @@ parser.add_argument("--xpid", default=None,
 # Training settings.
 parser.add_argument("--disable_checkpoint", action="store_true",
                     help="Disable saving checkpoint.")
-parser.add_argument("--savedir", default="~/Workdir/logs/torchbeast",
+parser.add_argument("--savedir", default="./logs/torchbeast",
                     help="Root dir where experiment data will be saved.")
 parser.add_argument("--num_actors", default=4, type=int, metavar="N",
                     help="Number of actors (default: 4).")
@@ -430,7 +430,6 @@ def train(flags, game_params):  # pylint: disable=too-many-branches, too-many-st
     # only model loaded into the GPU ?
     learner_model = IMPALA_AC(env=env, device='cuda', **game_params['HPs']).to(device=flags.device) 
     
-    # no more Adam
     optimizer = torch.optim.Adam(
         learner_model.parameters(),
         lr=flags.learning_rate
@@ -444,7 +443,13 @@ def train(flags, game_params):  # pylint: disable=too-many-branches, too-many-st
     #)
 
     def lr_lambda(epoch):
-        # linear schedule from 1 to 0 
+        """
+        Linear schedule from 1 to 0 used only for RMSprop. 
+        To be adjusted multiplying or not by batch size B depending on how the steps are counted.
+        epoch = number of optimizer steps
+        total_steps = optimizer steps * time steps * batch size
+                    or optimizer steps * time steps
+        """
         return 1 - min(epoch * T, flags.total_steps) / flags.total_steps #epoch * T * B if using B steps
 
     #scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
@@ -475,7 +480,7 @@ def train(flags, game_params):  # pylint: disable=too-many-branches, too-many-st
                 timings,
             )
             stats = learn(
-                flags, model, learner_model, batch, optimizer#, scheduler
+                flags, model, learner_model, batch, optimizer #, scheduler
             )
             timings.time("learn")
             with lock:
@@ -510,7 +515,7 @@ def train(flags, game_params):  # pylint: disable=too-many-branches, too-many-st
                 #"scheduler_state_dict": scheduler.state_dict(),
                 "flags": vars(flags),
             },
-            checkpointpath,
+            checkpointpath, # only one checkpoint at the time is saved
         )
     # end checkpoint
     
@@ -561,10 +566,9 @@ def train(flags, game_params):  # pylint: disable=too-many-branches, too-many-st
 # also this time it seems that is always working with the forward pass without a batch dimension 
 # (you have to add it manually when needed)
 
-# not working now
 def test(flags, game_params, num_episodes: int = 10):
     if flags.xpid is None:
-        checkpointpath = "/u/94/dainesn1/unix/Workdir/logs/torchbeast/latest/model.tar"
+        raise Exception("Specify a experiment id with --xpid. `latest` option not working.")
     else:
         checkpointpath = os.path.expandvars(
             os.path.expanduser("%s/%s/%s" % (flags.savedir, flags.xpid, "model.tar"))
