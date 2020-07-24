@@ -372,7 +372,7 @@ def train(flags, game_params):  # pylint: disable=too-many-branches, too-many-st
     checkpointpath = os.path.expandvars(
         os.path.expanduser("%s/%s/%s" % (flags.savedir, flags.xpid, "model.tar"))
     )
-
+    print("checkpointpath: ", checkpointpath)
     if flags.num_buffers is None:  # Set sensible default for num_buffers. IMPORTANT!!
         flags.num_buffers = max(2 * flags.num_actors, flags.batch_size)
     if flags.num_actors >= flags.num_buffers:

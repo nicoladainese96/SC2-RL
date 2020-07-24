@@ -66,8 +66,8 @@ def plot_results(results, moving_average=False, average_window=100):
     plt.xlabel("Number of epochs", fontsize=16)
     plt.ylabel("Entropy term", fontsize=16)
     plt.show()
-    
-    
+
+
 def plot_session(score, losses, moving_average=False, average_window=100):
     
     if moving_average:
@@ -125,7 +125,7 @@ def plot_session(score, losses, moving_average=False, average_window=100):
     plt.xlabel("Number of epochs", fontsize=16)
     plt.ylabel("Entropy term", fontsize=16)
     plt.show()
-    
+
 def plot_bA2C_session(score, losses, unroll_length, test_interval, moving_average=False, average_window=100):
     
     if moving_average:
@@ -186,5 +186,64 @@ def plot_bA2C_session(score, losses, unroll_length, test_interval, moving_averag
         plt.plot(n_epochs, -np.array(losses['entropies']))
 
     plt.xlabel("Number of steps", fontsize=16)
+    plt.ylabel("Entropy term", fontsize=16)
+    plt.show()
+
+
+def plot_IMPALA_session(results, moving_average=False, average_window=100):
+    score = results['score']
+    if moving_average:
+        n_epochs = np.arange(100, len(score))
+    else:
+        n_epochs = np.arange(len(score))
+        
+    ### plot score ###
+    plt.figure(figsize=(8,6))
+
+    if moving_average:
+        average_score = np.array([np.mean(score[i:i+100]) for i in range(len(score)-100)])
+        plt.plot(n_epochs, average_score)
+    else:
+        plt.plot(n_epochs, score)
+    plt.xlabel("Number of epochs", fontsize=16)
+    plt.ylabel("Reward", fontsize=16)
+    plt.show()
+    
+    ### plot critic loss ###
+    plt.figure(figsize=(8,6))
+
+    if moving_average:
+        average_score = np.array([np.mean(results['baseline_loss'][i:i+100]) for i in range(len(n_epochs))])
+        plt.plot(n_epochs, average_score)
+    else:
+        plt.plot(n_epochs, results['baseline_loss'])
+
+    plt.xlabel("Number of epochs", fontsize=16)
+    plt.ylabel("Critic loss", fontsize=16)
+    plt.show()
+
+    ### plot actor loss ###
+    plt.figure(figsize=(8,6))
+
+    if moving_average:
+        average_score = np.array([np.mean(results['pg_loss'][i:i+100]) for i in range(len(n_epochs))])
+        plt.plot(n_epochs, average_score)
+    else:
+        plt.plot(n_epochs, results['pg_loss'])
+
+    plt.xlabel("Number of epochs", fontsize=16)
+    plt.ylabel("Actor loss", fontsize=16)
+    plt.show()
+    
+    ### plot entropy ###
+    plt.figure(figsize=(8,6))
+
+    if moving_average:
+        average_score = np.array([np.mean(results['entropy_loss'][i:i+100]) for i in range(len(n_epochs))])
+        plt.plot(n_epochs, -average_score)
+    else:
+        plt.plot(n_epochs, -np.array(results['entropy_loss']))
+
+    plt.xlabel("Number of epochs", fontsize=16)
     plt.ylabel("Entropy term", fontsize=16)
     plt.show()
