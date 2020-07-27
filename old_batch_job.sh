@@ -8,4 +8,4 @@
 
 # email research-support@csc.fi for help
 module load pytorch/nvidia-20.03-py3
-singularity_wrapper exec python monobeast.py $*
+singularity_wrapper exec python -u run.py $*
