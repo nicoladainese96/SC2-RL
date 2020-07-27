@@ -195,7 +195,7 @@ def plot_IMPALA_session(results, moving_average=False, average_window=100):
     if moving_average:
         n_epochs = np.arange(100, len(score))
     else:
-        n_epochs = np.arange(len(score))
+        n_epochs = results['steps']
         
     ### plot score ###
     plt.figure(figsize=(8,6))
