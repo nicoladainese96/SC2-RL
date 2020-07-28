@@ -261,7 +261,7 @@ def learn(
     model,
     batch,
     optimizer,
-    scheduler,
+    #scheduler,
     lock=threading.Lock(),  # noqa: B008
 ):
     """Performs a learning (optimization) step."""
@@ -328,7 +328,7 @@ def learn(
         total_loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), flags.grad_norm_clipping)
         optimizer.step()
-        scheduler.step()
+        #scheduler.step()
         # similar to A3C; update learner, copy back to actor; 
         # but this updates all actors at the same time or just some of them? 
         # How is the update received? Only at a certain stage or asynchronously?
@@ -430,17 +430,17 @@ def train(flags, game_params):  # pylint: disable=too-many-branches, too-many-st
     # only model loaded into the GPU ?
     learner_model = IMPALA_AC(env=env, device='cuda', **game_params['HPs']).to(device=flags.device) 
     
-    #optimizer = torch.optim.Adam(
-    #    learner_model.parameters(),
-    #    lr=flags.learning_rate
-    #)
-    optimizer = torch.optim.RMSprop(
+    optimizer = torch.optim.Adam(
         learner_model.parameters(),
-        lr=flags.learning_rate,
-        momentum=flags.momentum,
-        eps=flags.epsilon,
-        alpha=flags.alpha,
+        lr=flags.learning_rate
     )
+    #optimizer = torch.optim.RMSprop(
+    #    learner_model.parameters(),
+    #    lr=flags.learning_rate,
+    #    momentum=flags.momentum,
+    #    eps=flags.epsilon,
+    #    alpha=flags.alpha,
+    #)
 
     def lr_lambda(epoch):
         """
@@ -452,7 +452,7 @@ def train(flags, game_params):  # pylint: disable=too-many-branches, too-many-st
         """
         return 1 - min(epoch * T, flags.total_steps) / flags.total_steps #epoch * T * B if using B steps
 
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    #scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
     logger = logging.getLogger("logfile")
     stat_keys = [
@@ -480,7 +480,7 @@ def train(flags, game_params):  # pylint: disable=too-many-branches, too-many-st
                 timings,
             )
             stats = learn(
-                flags, model, learner_model, batch, optimizer , scheduler
+                flags, model, learner_model, batch, optimizer #, scheduler
             )
             timings.time("learn")
             with lock:
