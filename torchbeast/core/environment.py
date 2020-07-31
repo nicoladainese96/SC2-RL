@@ -53,17 +53,22 @@ def _format_state(spatial_state, player_state):
     return spatial_state, player_state
 
 class Environment:
-    def __init__(self, env, obs_processer):
+    def __init__(self, env, obs_processer, random_seed=0):
         self.env = env
         self.obs_processer = obs_processer
         self.episode_return = None
         self.episode_step = None
+        np.random.seed(random_seed) # used to de-synchronize parallel environments at the beginning
 
-    def reset(self, skip_first=True):
+    def reset(self, skip_frame=True, frame_to_skip=1):
         obs = self.env.reset()
-        if skip_first:
-            action = actions.FunctionCall(actions.FUNCTIONS.no_op.id, [])
-            obs = self.env.step(actions = [action])
+        self.episode_return = torch.zeros(1, 1)
+        self.episode_step = torch.ones(1, 1, dtype=torch.int32) # reset is counted 
+        if skip_frame:
+            for _ in range(frame_to_skip):
+                action = actions.FunctionCall(actions.FUNCTIONS.no_op.id, [])
+                obs = self.env.step(actions = [action])
+                self.episode_step += 1 # used internally, need to count all actions 
         return self.unpack_obs(obs) 
     
     def unpack_obs(self, obs):
@@ -76,10 +81,11 @@ class Environment:
     
     def initial(self):
         initial_reward = torch.zeros(1, 1)
-        # This supports only single-tensor actions ATM.
-        self.episode_return = torch.zeros(1, 1) # (batch_dim, value) ?
-        self.episode_step = torch.zeros(1, 1, dtype=torch.int32)
-        initial_done = torch.ones(1, 1, dtype=torch.uint8) # why True instead of False?
+        #initial_done = torch.ones(1, 1, dtype=torch.uint8) # why True instead of False?
+        initial_done = torch.zeros(1, 1, dtype=torch.uint8) # mine modification 
+        # skip a random number of frames in the first episode so that for all training all enviromnents are not
+        # synchronized
+        #spatial_state, player_state, reward, done, action_mask = self.reset(frame_to_skip=np.random.randint(240))
         spatial_state, player_state, reward, done, action_mask = self.reset()
         spatial_state, player_state = _format_state(spatial_state, player_state)
         
@@ -106,16 +112,22 @@ class Environment:
         - All state tensors have been already processed by FullObsProcesser
         """
         obs = self.env.step(actions=action) 
-        spatial_state, player_state, reward, done, action_mask = self.unpack_obs(obs)
+        spatial_state, player_state, reward, done, action_mask = self.unpack_obs(obs) # spatial_state_trg, player_state_trg
         self.episode_step += 1
         self.episode_return += reward
         episode_step = self.episode_step
         episode_return = self.episode_return
         if done:
+            print("self.episode when done: ", self.episode_step)
+            if self.episode_step == 240:
+                print("Episode ended by time truncation.")
+                # use reset in any case but set bootstrap = True
             spatial_state, player_state, _, _, action_mask = self.reset()
-            self.episode_return = torch.zeros(1, 1)
-            self.episode_step = torch.zeros(1, 1, dtype=torch.int32)
-
+            # only case in which spatial_state cannot be used for bootstrapping
+            # because belongs to a new trajectory
+        # else:
+        # spatial_state, player_state = spatial_state_trg, player_state_trg
+        # same thing for the action mask
         spatial_state, player_state = _format_state(spatial_state, player_state) 
         reward = torch.tensor(reward).view(1, 1)
         done = torch.tensor(done).view(1, 1)

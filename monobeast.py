@@ -93,7 +93,7 @@ parser.add_argument("--disable_cuda", action="store_true",
                     help="Disable CUDA.")
 
 # Loss settings.
-parser.add_argument("--entropy_cost", default=0.001,
+parser.add_argument("--entropy_cost", default=0.0005,
                     type=float, help="Entropy cost/multiplier.")
 parser.add_argument("--baseline_cost", default=0.5,
                     type=float, help="Baseline cost/multiplier.")
@@ -104,7 +104,7 @@ parser.add_argument("--reward_clipping", default="abs_one",
                     help="Reward clipping.")
 
 # Optimizer settings.
-parser.add_argument("--learning_rate", default=7e-4,#0.00048,
+parser.add_argument("--learning_rate", default=0.0007,#0.00048,
                     type=float, metavar="LR", help="Learning rate.")
 parser.add_argument("--alpha", default=0.99, type=float,
                     help="RMSProp smoothing constant.")
@@ -124,7 +124,7 @@ logging.basicConfig(
     level=0,
 )
 
-Buffers = typing.Dict[str, typing.List[torch.Tensor]] #??
+Buffers = typing.Dict[str, typing.List[torch.Tensor]] 
 
 def init_game(game_params, map_name='MoveToBeacon', step_multiplier=8, **kwargs):
 
@@ -168,7 +168,7 @@ def act(
         seed = actor_index ^ int.from_bytes(os.urandom(4), byteorder="little")
         sc_env = init_game(game_params['env'], flags.map_name, random_seed=seed)
         obs_processer = IMPALA_ObsProcesser(action_table=model.action_table, **game_params['obs_processer'])
-        env = environment.Environment(sc_env, obs_processer)
+        env = environment.Environment(sc_env, obs_processer, seed)
         # initial rollout starts here
         env_output = env.initial() 
         with torch.no_grad():
@@ -204,10 +204,10 @@ def act(
                 #timings.time("step")
 
                 for key in env_output:
-                    buffers[key][index][t + 1, ...] = env_output[key]
+                    buffers[key][index][t+1, ...] = env_output[key] 
                 for key in agent_output:
                     if key not in ['sc_env_action']: # no need to save this key on buffers
-                        buffers[key][index][t + 1, ...] = agent_output[key]
+                        buffers[key][index][t+1, ...] = agent_output[key] 
                 # env_output will be like
                 # s_{0}, ..., s_{T}
                 # act_mask_{0}, ..., act_mask_{T}
@@ -261,21 +261,21 @@ def learn(
     model,
     batch,
     optimizer,
-    #scheduler,
+    scheduler,
     lock=threading.Lock(),  # noqa: B008
 ):
     """Performs a learning (optimization) step."""
     with lock:
         
-        learner_outputs = model.learner_step(batch) #ok
-        #print("learner_outputs: ", learner_outputs)
+        learner_outputs = model.learner_step(batch) 
         
         # Take final value function slice for bootstrapping.
         bootstrap_value = learner_outputs["baseline"][-1] # V_learner(s_T)
         entropy = learner_outputs['entropy']
         
         rearranged_batch = {}
-        rearranged_batch['done'] = batch['done'][:-1] # done_{0}, ..., done_{T-1}
+        #rearranged_batch['done'] = batch['done'][:-1] # done_{0}, ..., done_{T-1}
+        rearranged_batch['done'] = batch['done'][1:]
         rearranged_batch['reward'] = batch['reward'][1:] # reward_{0}, ..., reward_{T-1}
         rearranged_batch['log_prob'] = batch['log_prob'][:-1] # log_prob_{0}, ..., log_prob_{T-1}
         
@@ -288,7 +288,7 @@ def learn(
         elif flags.reward_clipping == "none":
             clipped_rewards = rewards
 
-        discounts = (~rearranged_batch["done"]).float() * flags.discounting
+        discounts = (~rearranged_batch["done"]).float() * flags.discounting # 0 if done, gamma otherwise
 
         vtrace_returns = vtrace.from_logits(
             behavior_action_log_probs=rearranged_batch["log_prob"], # actor
@@ -299,12 +299,11 @@ def learn(
             bootstrap_value=bootstrap_value, # coming from the learner too
         )
 
-        #print("vtrace_returns.pg_advantages: ", vtrace_returns.pg_advantages) # check if requires grad, it shouldn't
         pg_loss = compute_policy_gradient_loss(
             learner_outputs["log_prob"],
             vtrace_returns.pg_advantages,
         )
-        #print("vtrace_returns.vs: ", vtrace_returns.vs) # check if requires grad, it shouldn't
+       
         baseline_loss = flags.baseline_cost * compute_baseline_loss(
             vtrace_returns.vs - learner_outputs["baseline"]
         )
@@ -328,12 +327,7 @@ def learn(
         total_loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), flags.grad_norm_clipping)
         optimizer.step()
-        #scheduler.step()
-        # similar to A3C; update learner, copy back to actor; 
-        # but this updates all actors at the same time or just some of them? 
-        # How is the update received? Only at a certain stage or asynchronously?
-        # Consider that everything is executed `with lock:`
-        #print("model.state_dict() after update: ", model.state_dict())
+        scheduler.step()
         actor_model.load_state_dict(model.state_dict())
         return stats
 
@@ -343,17 +337,17 @@ def create_buffers(flags, obs_shape, player_shape, num_actions, max_num_spatial_
     T = flags.unroll_length
     # specs is a dict of dict which containt the keys 'size' and 'dtype'
     specs = dict(
-        spatial_state=dict(size=(T + 1, *obs_shape), dtype=torch.float32), 
-        player_state=dict(size=(T + 1, player_shape), dtype=torch.float32), 
-        action_mask=dict(size=(T + 1, num_actions), dtype=torch.bool), 
-        reward=dict(size=(T + 1,), dtype=torch.float32),
-        done=dict(size=(T + 1,), dtype=torch.bool),
-        episode_return=dict(size=(T + 1,), dtype=torch.float32),
-        episode_step=dict(size=(T + 1,), dtype=torch.int32),
-        log_prob=dict(size=(T + 1,), dtype=torch.float32),
-        main_action=dict(size=(T + 1,), dtype=torch.int64), 
-        categorical_indexes=dict(size=(T + 1, max_num_categorical_args), dtype=torch.int64),
-        spatial_indexes=dict(size=(T + 1, max_num_spatial_args), dtype=torch.int64),
+        spatial_state=dict(size=(T+1, *obs_shape), dtype=torch.float32), 
+        player_state=dict(size=(T+1, player_shape), dtype=torch.float32), 
+        action_mask=dict(size=(T+1, num_actions), dtype=torch.bool), 
+        reward=dict(size=(T+1,), dtype=torch.float32),
+        done=dict(size=(T+1,), dtype=torch.bool),
+        episode_return=dict(size=(T+1,), dtype=torch.float32),
+        episode_step=dict(size=(T+1,), dtype=torch.int32),
+        log_prob=dict(size=(T+1,), dtype=torch.float32),
+        main_action=dict(size=(T+1,), dtype=torch.int64), 
+        categorical_indexes=dict(size=(T+1, max_num_categorical_args), dtype=torch.int64),
+        spatial_indexes=dict(size=(T+1, max_num_spatial_args), dtype=torch.int64),
         #baseline=dict(size=(T + 1,), dtype=torch.float32),
     )
     buffers: Buffers = {key: [] for key in specs}
@@ -430,17 +424,17 @@ def train(flags, game_params):  # pylint: disable=too-many-branches, too-many-st
     # only model loaded into the GPU ?
     learner_model = IMPALA_AC(env=env, device='cuda', **game_params['HPs']).to(device=flags.device) 
     
-    optimizer = torch.optim.Adam(
-        learner_model.parameters(),
-        lr=flags.learning_rate
-    )
-    #optimizer = torch.optim.RMSprop(
+    #optimizer = torch.optim.Adam(
     #    learner_model.parameters(),
-    #    lr=flags.learning_rate,
-    #    momentum=flags.momentum,
-    #    eps=flags.epsilon,
-    #    alpha=flags.alpha,
+    #    lr=flags.learning_rate
     #)
+    optimizer = torch.optim.RMSprop(
+        learner_model.parameters(),
+        lr=flags.learning_rate,
+        momentum=flags.momentum,
+        eps=flags.epsilon,
+        alpha=flags.alpha,
+    )
 
     def lr_lambda(epoch):
         """
@@ -452,7 +446,7 @@ def train(flags, game_params):  # pylint: disable=too-many-branches, too-many-st
         """
         return 1 - min(epoch * T, flags.total_steps) / flags.total_steps #epoch * T * B if using B steps
 
-    #scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
     logger = logging.getLogger("logfile")
     stat_keys = [
@@ -480,7 +474,7 @@ def train(flags, game_params):  # pylint: disable=too-many-branches, too-many-st
                 timings,
             )
             stats = learn(
-                flags, model, learner_model, batch, optimizer #, scheduler
+                flags, model, learner_model, batch, optimizer , scheduler
             )
             timings.time("learn")
             with lock:
@@ -512,7 +506,7 @@ def train(flags, game_params):  # pylint: disable=too-many-branches, too-many-st
             {
                 "model_state_dict": model.state_dict(), 
                 "optimizer_state_dict": optimizer.state_dict(),
-                #"scheduler_state_dict": scheduler.state_dict(),
+                "scheduler_state_dict": scheduler.state_dict(),
                 "flags": vars(flags),
             },
             checkpointpath, # only one checkpoint at the time is saved
@@ -531,7 +525,7 @@ def train(flags, game_params):  # pylint: disable=too-many-branches, too-many-st
                 checkpoint()
                 last_checkpoint_time = timer()
 
-            sps = (step - start_step) / (timer() - start_time)
+            sps = (step - start_step) / (timer() - start_time) # steps per second
             if stats.get("episode_returns", None):
                 mean_return = (
                     "Return per episode: %.1f. " % stats["mean_episode_return"]
