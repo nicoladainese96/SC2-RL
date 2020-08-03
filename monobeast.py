@@ -364,6 +364,13 @@ def create_buffers(flags, obs_shape, player_shape, num_actions, max_num_spatial_
 
 
 def train(flags, game_params):  # pylint: disable=too-many-branches, too-many-statements
+    """
+    1. Init actor model and create_buffers()
+    2. Starts 'num_actors' act() functions
+    3. Init learner model and optimizer, loads the former on the GPU
+    4. Launches 'num_learner_threads' threads executing batch_and_learn()
+    5. train finishes when all batch_and_learn threads finish, i.e. when steps >= flags.total_steps
+    """
     if flags.xpid is None:
         flags.xpid = "torchbeast-%s" % time.strftime("%Y%m%d-%H%M%S")
     plogger = file_writer.FileWriter(
