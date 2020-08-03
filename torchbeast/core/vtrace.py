@@ -49,9 +49,12 @@ VTraceReturns = collections.namedtuple("VTraceReturns", "vs pg_advantages")
 def from_logits(
     behavior_action_log_probs,
     target_action_log_probs,
-    discounts,
+    not_done,
+    bootstrap,
+    gamma,
     rewards,
     values,
+    values_trg,
     bootstrap_value,
     clip_rho_threshold=1.0,
     clip_pg_rho_threshold=1.0,
@@ -72,9 +75,12 @@ def from_logits(
     log_rhos = target_action_log_probs - behavior_action_log_probs # log_(q1/p1), ... , log_(q_T/p_T)
     vtrace_returns = from_importance_weights(
         log_rhos=log_rhos,
-        discounts=discounts,
+        not_done=not_done,
+        bootstrap=bootstrap,
+        gamma=gamma,
         rewards=rewards,
         values=values,
+        values_trg=values_trg,
         bootstrap_value=bootstrap_value,
         clip_rho_threshold=clip_rho_threshold,
         clip_pg_rho_threshold=clip_pg_rho_threshold,
@@ -90,9 +96,12 @@ def from_logits(
 @torch.no_grad()
 def from_importance_weights(
     log_rhos,
-    discounts,
+    not_done,
+    bootstrap,
+    gamma,
     rewards,
     values,
+    values_trg,
     bootstrap_value,
     clip_rho_threshold=1.0,
     clip_pg_rho_threshold=1.0,
@@ -108,12 +117,12 @@ def from_importance_weights(
         cs = torch.clamp(rhos, max=1.0)
         # Append bootstrapped value to get [v1, ..., v_t+1] - actually they start from v2 in my counting
         values_t_plus_1 = torch.cat(
-            [values[1:], torch.unsqueeze(bootstrap_value, 0)], dim=0
+            [values_trg[1:], torch.unsqueeze(bootstrap_value, 0)], dim=0
         )
-        # r2 + d2*v2 - v1 - which is wrong
-        deltas = clipped_rhos * (rewards + discounts * values_t_plus_1 - values) 
+        deltas = clipped_rhos * (rewards + gamma*(not_done + bootstrap).float()*values_t_plus_1 - values) 
 
         acc = torch.zeros_like(bootstrap_value)
+        discounts = gamma*not_done.float()
         result = []
         for t in range(discounts.shape[0] - 1, -1, -1): # start from t=T+1 and goes down to t=1
             acc = deltas[t] + discounts[t] * cs[t] * acc

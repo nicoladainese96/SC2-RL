@@ -193,7 +193,7 @@ def plot_bA2C_session(score, losses, unroll_length, test_interval, moving_averag
 def plot_IMPALA_session(results, moving_average=False, average_window=100):
     score = results['score']
     if moving_average:
-        n_epochs = np.arange(100, len(score))
+        n_epochs = results['steps'][average_window:]
     else:
         n_epochs = results['steps']
         
@@ -201,11 +201,11 @@ def plot_IMPALA_session(results, moving_average=False, average_window=100):
     plt.figure(figsize=(8,6))
 
     if moving_average:
-        average_score = np.array([np.mean(score[i:i+100]) for i in range(len(score)-100)])
+        average_score = np.array([np.mean(score[i:i+average_window]) for i in range(len(n_epochs))])
         plt.plot(n_epochs, average_score)
     else:
         plt.plot(n_epochs, score)
-    plt.xlabel("Number of epochs", fontsize=16)
+    plt.xlabel("Number of steps", fontsize=16)
     plt.ylabel("Reward", fontsize=16)
     plt.show()
     
@@ -213,12 +213,12 @@ def plot_IMPALA_session(results, moving_average=False, average_window=100):
     plt.figure(figsize=(8,6))
 
     if moving_average:
-        average_score = np.array([np.mean(results['baseline_loss'][i:i+100]) for i in range(len(n_epochs))])
+        average_score = np.array([np.mean(results['baseline_loss'][i:i+average_window]) for i in range(len(n_epochs))])
         plt.plot(n_epochs, average_score)
     else:
         plt.plot(n_epochs, results['baseline_loss'])
 
-    plt.xlabel("Number of epochs", fontsize=16)
+    plt.xlabel("Number of steps", fontsize=16)
     plt.ylabel("Critic loss", fontsize=16)
     plt.show()
 
@@ -226,12 +226,12 @@ def plot_IMPALA_session(results, moving_average=False, average_window=100):
     plt.figure(figsize=(8,6))
 
     if moving_average:
-        average_score = np.array([np.mean(results['pg_loss'][i:i+100]) for i in range(len(n_epochs))])
+        average_score = np.array([np.mean(results['pg_loss'][i:i+average_window]) for i in range(len(n_epochs))])
         plt.plot(n_epochs, average_score)
     else:
         plt.plot(n_epochs, results['pg_loss'])
 
-    plt.xlabel("Number of epochs", fontsize=16)
+    plt.xlabel("Number of steps", fontsize=16)
     plt.ylabel("Actor loss", fontsize=16)
     plt.show()
     
@@ -239,11 +239,11 @@ def plot_IMPALA_session(results, moving_average=False, average_window=100):
     plt.figure(figsize=(8,6))
 
     if moving_average:
-        average_score = np.array([np.mean(results['entropy_loss'][i:i+100]) for i in range(len(n_epochs))])
+        average_score = np.array([np.mean(results['entropy_loss'][i:i+average_window]) for i in range(len(n_epochs))])
         plt.plot(n_epochs, -average_score)
     else:
         plt.plot(n_epochs, -np.array(results['entropy_loss']))
 
-    plt.xlabel("Number of epochs", fontsize=16)
+    plt.xlabel("Number of steps", fontsize=16)
     plt.ylabel("Entropy term", fontsize=16)
     plt.show()

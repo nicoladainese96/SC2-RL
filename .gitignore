@@ -10,5 +10,17 @@ Results/CollectMineralShards/agent*
 Results/FindAndDefeatZerglings/Checkpoints/
 Results/FindAndDefeatZerglings/Inspection/
 Results/FindAndDefeatZerglings/agent*
+Results/BuildMarines/agent*
+Results/BuildMarines/Checkpoints/
+Results/BuildMarines/Inspection/
+Results/CollectMineralsAndGas/agent*
+Results/CollectMineralsAndGas/Checkpoints/
+Results/CollectMineralsAndGas/Inspection/
+Results/DefeatRoaches/agent*
+Results/DefeatRoaches/Checkpoints/
+Results/DefeatRoaches/Inspection/
+Results/DefeatZerglingsAndBanelings/agent*
+Results/DefeatZerglingsAndBanelings/Checkpoints/
+Results/DefeatZerglingsAndBanelings/Inspection/
 logs/
 
