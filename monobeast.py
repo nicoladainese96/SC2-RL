@@ -29,7 +29,6 @@ from torch import multiprocessing as mp
 from torch import nn
 from torch.nn import functional as F
 
-#from torchbeast import atari_wrappers
 from torchbeast.core import environment
 from torchbeast.core import file_writer
 from torchbeast.core import prof
@@ -104,6 +103,8 @@ parser.add_argument("--reward_clipping", default="abs_one",
                     help="Reward clipping.")
 
 # Optimizer settings.
+parser.add_argument("--optim", default="RMSprop",
+                    type=str, help="Optimizer. Choose between RMSprop and Adam.")
 parser.add_argument("--learning_rate", default=0.0007,#0.00048,
                     type=float, metavar="LR", help="Learning rate.")
 parser.add_argument("--alpha", default=0.99, type=float,
@@ -353,7 +354,8 @@ def learn(
         total_loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), flags.grad_norm_clipping)
         optimizer.step()
-        scheduler.step()
+        if flags.optim == "RMSprop":
+            scheduler.step()
         actor_model.load_state_dict(model.state_dict())
         return stats
 
@@ -452,17 +454,19 @@ def train(flags, game_params):  # pylint: disable=too-many-branches, too-many-st
     # only model loaded into the GPU ?
     learner_model = IMPALA_AC(env=env, device='cuda', **game_params['HPs']).to(device=flags.device) 
     
-    #optimizer = torch.optim.Adam(
-    #    learner_model.parameters(),
-    #    lr=flags.learning_rate
-    #)
-    optimizer = torch.optim.RMSprop(
-        learner_model.parameters(),
-        lr=flags.learning_rate,
-        momentum=flags.momentum,
-        eps=flags.epsilon,
-        alpha=flags.alpha,
-    )
+    if flags.optim == "Adam":
+        optimizer = torch.optim.Adam(
+            learner_model.parameters(),
+            lr=flags.learning_rate
+        )
+    else:
+        optimizer = torch.optim.RMSprop(
+            learner_model.parameters(),
+            lr=flags.learning_rate,
+            momentum=flags.momentum,
+            eps=flags.epsilon,
+            alpha=flags.alpha,
+        )
 
     def lr_lambda(epoch):
         """
@@ -530,15 +534,25 @@ def train(flags, game_params):  # pylint: disable=too-many-branches, too-many-st
         if flags.disable_checkpoint:
             return
         logging.info("Saving checkpoint to %s", checkpointpath)
-        torch.save(
-            {
-                "model_state_dict": model.state_dict(), 
-                "optimizer_state_dict": optimizer.state_dict(),
-                "scheduler_state_dict": scheduler.state_dict(),
-                "flags": vars(flags),
-            },
-            checkpointpath, # only one checkpoint at the time is saved
-        )
+        if flags.optim == "Adam":
+            torch.save(
+                {
+                    "model_state_dict": model.state_dict(), 
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "flags": vars(flags),
+                },
+                checkpointpath, # only one checkpoint at the time is saved
+            )
+        else:
+            torch.save(
+                {
+                    "model_state_dict": model.state_dict(), 
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "scheduler_state_dict": scheduler.state_dict(),
+                    "flags": vars(flags),
+                },
+                checkpointpath, # only one checkpoint at the time is saved
+            )    
     # end checkpoint
     
     timer = timeit.default_timer
@@ -626,6 +640,8 @@ def test(flags, game_params, num_episodes: int = 10):
 # here take inspiration from run.py to define all HPs (e.g. not only flags)
 # also it would be better to have training with testing inside it, as I usually do
 def main(flags):
+    assert flags.optim in ['RMSprop', 'Adam'], \
+        "Expected --optim to be one of [RMSprop, Adam], got "+flags.optim
     # Environment parameters
     RESOLUTION = flags.res
     game_params = {}
