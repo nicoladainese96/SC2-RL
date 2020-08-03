@@ -114,6 +114,8 @@ class IMPALA_AC(ParallelActorCritic):
         Keywords needed:
         - spatial_state
         - player_state
+        - spatial_state_trg
+        - player_state_trg
         - action_mask
         - main_action
         - categorical_indexes
@@ -121,6 +123,8 @@ class IMPALA_AC(ParallelActorCritic):
         """
         spatial_state = batch['spatial_state'].to(self.device)
         player_state = batch['player_state'].to(self.device)
+        spatial_state_trg = batch['spatial_state_trg'].to(self.device)
+        player_state_trg = batch['player_state_trg'].to(self.device)
         action_mask = batch['action_mask'].to(self.device)
         main_action = batch['main_action'].to(self.device)
         categorical_indexes = batch['categorical_indexes'].to(self.device)
@@ -142,6 +146,8 @@ class IMPALA_AC(ParallelActorCritic):
         # merge all batch and time dimensions
         spatial_state = spatial_state.view((-1,)+spatial_state.shape[2:])
         player_state = player_state.view((-1,)+player_state.shape[2:])
+        spatial_state_trg = spatial_state_trg.view((-1,)+spatial_state_trg.shape[2:])
+        player_state_trg = player_state_trg.view((-1,)+player_state_trg.shape[2:])
         action_mask = action_mask.view((-1,)+action_mask.shape[2:])
         main_action = main_action.view((-1,)+main_action.shape[2:])
         categorical_indexes = categorical_indexes.view((-1,)+categorical_indexes.shape[2:])
@@ -190,8 +196,12 @@ class IMPALA_AC(ParallelActorCritic):
         log_prob = log_prob.index_add(0, batch_index, spatial_log_prob)
         
         baseline = self.V_critic(nonspatial_features=nonspatial_features)
+        baseline_trg = self.V_critic(spatial_state=spatial_state_trg, player_state=player_state_trg)
         
-        return dict(log_prob=log_prob.view(T,B), baseline=baseline.view(T,B), entropy=entropy)
+        return dict(log_prob=log_prob.view(T,B), 
+                    baseline=baseline.view(T,B), 
+                    baseline_trg=baseline_trg.view(T,B), 
+                    entropy=entropy)
     
     def sample_spatial_params(self, spatial_features, actions):
         """

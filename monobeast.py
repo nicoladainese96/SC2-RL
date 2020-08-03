@@ -270,32 +270,36 @@ def learn(
         learner_outputs = model.learner_step(batch) 
         
         # Take final value function slice for bootstrapping.
-        bootstrap_value = learner_outputs["baseline"][-1] # V_learner(s_T)
+        bootstrap_value = learner_outputs["baseline_trg"][-1] # V_learner(s_T)
         entropy = learner_outputs['entropy']
         
-        rearranged_batch = {}
+        #rearranged_batch = {}
         #rearranged_batch['done'] = batch['done'][:-1] # done_{0}, ..., done_{T-1}
-        rearranged_batch['done'] = batch['done'][1:]
-        rearranged_batch['reward'] = batch['reward'][1:] # reward_{0}, ..., reward_{T-1}
-        rearranged_batch['log_prob'] = batch['log_prob'][:-1] # log_prob_{0}, ..., log_prob_{T-1}
+        #rearranged_batch['done'] = batch['done'][1:]
+        #rearranged_batch['bootstrap'] = batch['bootstrap'][1:]
+        #rearranged_batch['reward'] = batch['reward'][1:] # reward_{0}, ..., reward_{T-1}
+        #rearranged_batch['log_prob'] = batch['log_prob'][:-1] # log_prob_{0}, ..., log_prob_{T-1}
         
         # gets [log_prob_{0}, ..., log_prob_{T-1}] and [V_{0},...,V_{T-1}]
         learner_outputs = {key: tensor[:-1] for key, tensor in learner_outputs.items() if key != 'entropy'}
 
-        rewards = rearranged_batch["reward"]
+        rewards = batch['reward'][1:]
         if flags.reward_clipping == "abs_one":
             clipped_rewards = torch.clamp(rewards, -1, 1)
         elif flags.reward_clipping == "none":
             clipped_rewards = rewards
 
-        discounts = (~rearranged_batch["done"]).float() * flags.discounting # 0 if done, gamma otherwise
+        #discounts = (~rearranged_batch["done"]).float() * flags.discounting # 0 if done, gamma otherwise
 
         vtrace_returns = vtrace.from_logits(
-            behavior_action_log_probs=rearranged_batch["log_prob"], # actor
+            behavior_action_log_probs=batch['log_prob'][:-1], # actor
             target_action_log_probs=learner_outputs["log_prob"], # learner
-            discounts=discounts,
+            not_done=(~batch['done'][1:]).float(),
+            bootstrap=batch['bootstrap'][1:],
+            gamma=flags.discounting,
             rewards=clipped_rewards,
             values=learner_outputs["baseline"],
+            values_trg=learner_outputs["baseline_trg"],
             bootstrap_value=bootstrap_value, # coming from the learner too
         )
 
@@ -309,7 +313,29 @@ def learn(
         )
 
         entropy_loss = flags.entropy_cost * entropy
-
+        ### debugging
+        if baseline_loss > 8000:
+            print("discounts: ", batch['done'][1:,0])
+            print("rewards: ", rewards[:,0])
+            print("learner_outputs['baseline']: ", learner_outputs["baseline"][:,0])
+            print("bootstrap_value: ", bootstrap_value[0])
+            print("vtrace_returns.vs: ", vtrace_returns.vs[:,0])
+            
+            checkpointpath = os.path.expandvars(
+                os.path.expanduser("%s/%s/%s" % (flags.savedir, flags.xpid, "vtrace.tar"))
+            )
+            
+            torch.save(
+            {
+                "discounts": batch['done'][1:], 
+                "rewards": rewards,
+                "baseline": learner_outputs["baseline"],
+                "bootstrap_value": bootstrap_value,
+                "vs": vtrace_returns.vs,
+            },
+            checkpointpath, # only one checkpoint at the time is saved
+            )
+        ### end debugging
         total_loss = pg_loss + baseline_loss + entropy_loss
         # not every time we get an episode return because the unroll length is shorter than the episode length, 
         # so not every time batch['done'] contains some True entries
@@ -339,16 +365,18 @@ def create_buffers(flags, obs_shape, player_shape, num_actions, max_num_spatial_
     specs = dict(
         spatial_state=dict(size=(T+1, *obs_shape), dtype=torch.float32), 
         player_state=dict(size=(T+1, player_shape), dtype=torch.float32), 
+        spatial_state_trg=dict(size=(T+1, *obs_shape), dtype=torch.float32), 
+        player_state_trg=dict(size=(T+1, player_shape), dtype=torch.float32), 
         action_mask=dict(size=(T+1, num_actions), dtype=torch.bool), 
         reward=dict(size=(T+1,), dtype=torch.float32),
         done=dict(size=(T+1,), dtype=torch.bool),
+        bootstrap=dict(size=(T+1,), dtype=torch.bool),
         episode_return=dict(size=(T+1,), dtype=torch.float32),
         episode_step=dict(size=(T+1,), dtype=torch.int32),
         log_prob=dict(size=(T+1,), dtype=torch.float32),
         main_action=dict(size=(T+1,), dtype=torch.int64), 
         categorical_indexes=dict(size=(T+1, max_num_categorical_args), dtype=torch.int64),
         spatial_indexes=dict(size=(T+1, max_num_spatial_args), dtype=torch.int64),
-        #baseline=dict(size=(T + 1,), dtype=torch.float32),
     )
     buffers: Buffers = {key: [] for key in specs}
     for _ in range(flags.num_buffers):
@@ -592,7 +620,7 @@ def test(flags, game_params, num_episodes: int = 10):
             )
     env.close()
     logging.info(
-        "Average returns over %i steps: %.1f", num_episodes, sum(returns) / len(returns)
+        "Average returns over %i episodes: %.1f", num_episodes, sum(returns) / len(returns)
     )
 
 # here take inspiration from run.py to define all HPs (e.g. not only flags)

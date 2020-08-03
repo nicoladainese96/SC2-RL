@@ -63,7 +63,7 @@ class Environment:
     def reset(self, skip_frame=True, frame_to_skip=1):
         obs = self.env.reset()
         self.episode_return = torch.zeros(1, 1)
-        self.episode_step = torch.ones(1, 1, dtype=torch.int32) # reset is counted 
+        self.episode_step = torch.zeros(1, 1, dtype=torch.int32) # reset is counted 
         if skip_frame:
             for _ in range(frame_to_skip):
                 action = actions.FunctionCall(actions.FUNCTIONS.no_op.id, [])
@@ -83,6 +83,7 @@ class Environment:
         initial_reward = torch.zeros(1, 1)
         #initial_done = torch.ones(1, 1, dtype=torch.uint8) # why True instead of False?
         initial_done = torch.zeros(1, 1, dtype=torch.uint8) # mine modification 
+        initial_boostrap = torch.zeros(1, 1, dtype=torch.uint8)
         # skip a random number of frames in the first episode so that for all training all enviromnents are not
         # synchronized
         #spatial_state, player_state, reward, done, action_mask = self.reset(frame_to_skip=np.random.randint(240))
@@ -92,9 +93,12 @@ class Environment:
         return dict(
             spatial_state=spatial_state, 
             player_state=player_state,
+            spatial_state_trg=spatial_state, 
+            player_state_trg=player_state,
             action_mask=action_mask,
             reward=initial_reward,
             done=initial_done,
+            bootstrap=initial_boostrap,
             episode_return=self.episode_return,
             episode_step=self.episode_step
         )
@@ -110,33 +114,47 @@ class Environment:
         - Everything is returned as tensors
         - spatial and player returned separately
         - All state tensors have been already processed by FullObsProcesser
+        - state_trg[t+1] can be used to bootstrap the value for state[t] as 
+          V(state[t]) = reward[t] + (done[t]+bootstrap[t])*discount*V(state_trg[t+1])
+        - state[t] is equal to state_trg[t] if state_trg[t] wasn't terminal, otherwise
+          is the state obtained by resetting the environment. Used to get current state
+          value and to sample actions for next step.
+        - bootstrap is used to signal steps in which done=True but only because of a time
+          truncation, so we actually need to take into account the value of the last target state.
         """
         obs = self.env.step(actions=action) 
-        spatial_state, player_state, reward, done, action_mask = self.unpack_obs(obs) # spatial_state_trg, player_state_trg
+        spatial_state_trg, player_state_trg, reward, done, action_mask = self.unpack_obs(obs) 
+        spatial_state_trg, player_state_trg = _format_state(spatial_state_trg, player_state_trg) 
         self.episode_step += 1
         self.episode_return += reward
         episode_step = self.episode_step
         episode_return = self.episode_return
         if done:
-            print("self.episode when done: ", self.episode_step)
             if self.episode_step == 240:
-                print("Episode ended by time truncation.")
-                # use reset in any case but set bootstrap = True
-            spatial_state, player_state, _, _, action_mask = self.reset()
+                bootstrap = torch.tensor(True).view(1, 1) # time truncation
+            else:
+                bootstrap = torch.tensor(False).view(1, 1) # real end
             # only case in which spatial_state cannot be used for bootstrapping
             # because belongs to a new trajectory
-        # else:
-        # spatial_state, player_state = spatial_state_trg, player_state_trg
-        # same thing for the action mask
-        spatial_state, player_state = _format_state(spatial_state, player_state) 
+            spatial_state, player_state, _, _, action_mask = self.reset()
+            spatial_state, player_state = _format_state(spatial_state, player_state) 
+        else:
+            # already formatted
+            bootstrap = torch.tensor(False).view(1, 1) # default case
+            spatial_state = spatial_state_trg
+            player_state = player_state_trg
+        
         reward = torch.tensor(reward).view(1, 1)
         done = torch.tensor(done).view(1, 1)
         return dict(
             spatial_state=spatial_state, 
             player_state=player_state,
+            spatial_state_trg=spatial_state, 
+            player_state_trg=player_state,
             action_mask=action_mask,
             reward=reward,
             done=done,
+            bootstrap=bootstrap,
             episode_return=episode_return,
             episode_step=episode_step
         )
