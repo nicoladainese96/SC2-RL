@@ -314,29 +314,6 @@ def learn(
         )
 
         entropy_loss = flags.entropy_cost * entropy
-        ### debugging
-        if baseline_loss > 8000:
-            print("discounts: ", batch['done'][1:,0])
-            print("rewards: ", rewards[:,0])
-            print("learner_outputs['baseline']: ", learner_outputs["baseline"][:,0])
-            print("bootstrap_value: ", bootstrap_value[0])
-            print("vtrace_returns.vs: ", vtrace_returns.vs[:,0])
-            
-            checkpointpath = os.path.expandvars(
-                os.path.expanduser("%s/%s/%s" % (flags.savedir, flags.xpid, "vtrace.tar"))
-            )
-            
-            torch.save(
-            {
-                "discounts": batch['done'][1:], 
-                "rewards": rewards,
-                "baseline": learner_outputs["baseline"],
-                "bootstrap_value": bootstrap_value,
-                "vs": vtrace_returns.vs,
-            },
-            checkpointpath, # only one checkpoint at the time is saved
-            )
-        ### end debugging
         total_loss = pg_loss + baseline_loss + entropy_loss
         # not every time we get an episode return because the unroll length is shorter than the episode length, 
         # so not every time batch['done'] contains some True entries
@@ -579,6 +556,7 @@ def train(flags, game_params):  # pylint: disable=too-many-branches, too-many-st
                 mean_return = (
                     "Return per episode: %.1f. " % stats["mean_episode_return"]
                 )
+
             else:
                 mean_return = ""
             total_loss = stats.get("total_loss", float("inf"))
