@@ -190,7 +190,7 @@ def plot_bA2C_session(score, losses, unroll_length, test_interval, moving_averag
     plt.show()
 
 
-def plot_IMPALA_session(results, moving_average=False, average_window=100):
+def plot_IMPALA_session(results, map_name, moving_average=False, average_window=100):
     score = results['score']
     if moving_average:
         n_epochs = results['steps'][average_window:]
@@ -205,6 +205,7 @@ def plot_IMPALA_session(results, moving_average=False, average_window=100):
         plt.plot(n_epochs, average_score)
     else:
         plt.plot(n_epochs, score)
+    plt.title("Performance for %s"%map_name, fontsize=16)
     plt.xlabel("Number of steps", fontsize=16)
     plt.ylabel("Reward", fontsize=16)
     plt.show()

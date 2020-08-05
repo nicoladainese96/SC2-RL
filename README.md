@@ -32,6 +32,14 @@ Main requirements:
 - StarCraftII (see https://github.com/Blizzard/s2client-proto#downloads to install it on Linux; currently using version 4.10)
 - pytorch (tested in version 1.5.0 / 1.5.1)
 
-```python
+## Preliminary results
 
-```
+MoveToBeacon: 120k steps, average asymptotic score 26 (target to reach\*: 26)
+CollectMineralShards: 3.6M steps, average asymptotic score 94 (target to reach\*: 103)
+FindAndDefeatZerglings: 3.6M steps, average asymptotic score 43 (target to reach\*: 45)
+
+\*based on results from StarCraft II: A New Challenge for Reinforcement Learning (https://arxiv.org/abs/1708.04782) for the FullyConv agent.
+
+<img src='Supplementary material/MTB.png'>
+<img src='Supplementary material/CMS.png'>
+<img src='Supplementary material/FADZ.png'>
