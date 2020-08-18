@@ -41,6 +41,7 @@ from AC_modules.IMPALA import IMPALA_AC
 import AC_modules.Networks as net
 import absl 
 import sys
+import numpy as np
 
 # yapf: disable
 parser = argparse.ArgumentParser(description="PyTorch Scalable Agent for StarCraftII Learning Environment")
@@ -587,7 +588,7 @@ def train(flags, game_params):  # pylint: disable=too-many-branches, too-many-st
 # also this time it seems that is always working with the forward pass without a batch dimension 
 # (you have to add it manually when needed)
 
-def test(flags, game_params, num_episodes: int = 10):
+def test(flags, game_params, num_episodes: int = 100):
     if flags.xpid is None:
         raise Exception("Specify a experiment id with --xpid. `latest` option not working.")
     else:
@@ -618,12 +619,13 @@ def test(flags, game_params, num_episodes: int = 10):
                 observation["episode_return"].item(),
             )
     env.close()
+    returns = np.array(returns)
     logging.info(
-        "Average returns over %i episodes: %.1f", num_episodes, sum(returns) / len(returns)
+        "Average returns over %i episodes: %.2f (std %.2f) ", num_episodes, returns.mean(), returns.std()
     )
+    print("Saving to file")
+    np.save('%s/%s/test_results'%(flags.savedir, flags.xpid), returns)
 
-# here take inspiration from run.py to define all HPs (e.g. not only flags)
-# also it would be better to have training with testing inside it, as I usually do
 def main(flags):
     assert flags.optim in ['RMSprop', 'Adam'], \
         "Expected --optim to be one of [RMSprop, Adam], got "+flags.optim
