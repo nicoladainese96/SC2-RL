@@ -247,3 +247,79 @@ class IMPALA_ObsProcesser(FullObsProcesser):
         """
         action_mask = ~torch.tensor([a in available_actions for a in self.action_table], dtype=torch.bool)
         return action_mask
+    
+class IMPALA_ObsProcesser_v1(IMPALA_ObsProcesser):
+    def __init__(self, env, action_table, screen_names=[], minimap_names=[], select_all=False):
+        super().__init__(action_table, screen_names, minimap_names, select_all)
+        # Used to tile binary masks to screen and minimap layers depending on where the last action acted
+        self.screen_mask = list(map(lambda x: self.check_if_screen(env, x, True), self.action_table))
+        self.minimap_mask = list(map(lambda x: self.check_if_screen(env, x, False), self.action_table))
+        
+    def get_state(self, obs):
+        feature_screen = obs[0].observation['feature_screen']
+        feature_minimap = obs[0].observation['feature_minimap']
+        player_info = obs[0].observation['player'].astype(float)
+        
+        last_action = obs[0].observation['last_actions']
+        last_action_idx = self.get_last_action_idx(last_action)
+        
+        screen_layers, screen_names = self._process_screen_features(feature_screen)
+        screen_layers = self.tile_binary_mask(screen_layers, last_action_idx, screen=True)
+        
+        minimap_layers, minimap_names = self._process_minimap_features(feature_minimap)
+        minimap_layers = self.tile_binary_mask(minimap_layers, last_action_idx, screen=False)
+        
+        player_features, player_names = self._process_player_features(player_info)
+        state = {'screen_layers':screen_layers, 
+                 'minimap_layers':minimap_layers, 
+                 'player_features':player_features,
+                 'last_action':last_action_idx
+                }
+        names = {'screen_names':screen_names, 'minimap_names':minimap_names, 'player_names':player_names}
+        return state, names
+    
+    def get_last_action_idx(self, last_action):
+        if len(last_action) == 0:
+            # explicitly code no_op action
+            last_action = 0
+        else:
+            last_action = last_action[0]
+        last_action_idx = np.where(IMP_op.action_table == last_action)[0] # (batch,)
+        return last_action_idx 
+    
+    def tile_binary_mask(self, spatial_layers, last_action_idx, screen=True):
+        if screen:
+            binary_mask = np.array([self.screen_mask[last_action_idx[0]]])
+        else:
+            binary_mask = np.array([self.minimap_mask[last_action_idx[0]]])
+        binary_mask2D = np.tile(binary_mask, [1,*spatial_layers.shape[-2:]])
+        spatial_layers = np.concatenate([spatial_layers, binary_mask2D])
+        return spatial_layers
+    
+    def get_n_channels(self):
+        """
+        Add 1 to the screen and minimap channels because of default binary mask tiling
+        """
+        screen_channels, minimap_channels = super().get_n_channels()
+        player_channels = len(self.useful_indexes)
+        return screen_channels+1, minimap_channels+1, player_channels
+    
+    @static_method
+    def check_if_screen(env, sc_env_action, screen=True):
+        """
+        If screen=True checks if sc_env_action acts on the screen.
+        If screen=False checks if sc_env_action acts on the minimap.
+        Note: some actions without spatial parameters are considered 
+              not to act on any of the two.
+        """
+        all_actions = env.action_spec()[0][1]
+        all_arguments = env.action_spec()[0][0]
+        args = all_actions[sc_env_action].args
+        names = [all_arguments[arg.id].name for arg in args]
+        if screen:
+            return np.any(['screen' in n for n in names])
+        else:
+            return np.any(['minimap' in n for n in names])
+        
+    
+        

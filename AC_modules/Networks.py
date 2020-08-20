@@ -290,7 +290,12 @@ class ParallelCategoricalNet(nn.Module):
         return arg, log_prob
     
 class CategoricalIMPALA(ParallelCategoricalNet):
-    def __init__(self, n_features, sizes, n_arguments):
+    def __init__(
+        self, 
+        n_features, 
+        sizes, 
+        n_arguments
+    ):
         super(CategoricalIMPALA, self).__init__(n_features, sizes, n_arguments)
         
     def forward(self, state_rep):
@@ -431,6 +436,27 @@ class SpatialIMPALA(ParallelSpatialParameters):
         x = x.reshape((x.shape[0],self.n_args,-1))
         log_probs = F.log_softmax(x, dim=(-1))
         return log_probs
+    
+class SpatialIMPALA_v2(SpatialIMPALA):
+    """
+    Same as SpatialIMPALA, but handles inputs of linear size 4 times smaller than the output size,
+    e.g. 8x8 in input but have to create a logit matrix of 32x32
+    """
+    def __init__(
+        self, 
+        n_channels, 
+        linear_size, 
+        n_arguments
+    ):
+        super(SpatialIMPALA_v2, self).__init__(n_channels, linear_size, n_arguments)
+        self.conv = nn.Sequential(
+            nn.ConvTranspose2d(n_channels, 16, kernel_size=4, stride=2, padding=1),
+            nn.ReLU(),
+            nn.ConvTranspose2d(16, 16, kernel_size=4, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(16, n_arguments, kernel_size=3, stride=1, padding=1)
+        )
+        
     
 class ConditionedSpatialParameters(nn.Module):
     
