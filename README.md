@@ -1,6 +1,6 @@
 # SC2-RL
 
-Last update: 24/07/2020
+Last update: 5/08/2020
 
 Repository containing the code for my master thesis Deep Reinforcement Learning for StarCraft II Learning Environment, developed during internship at Aalto University under the supervision of Alexander Ilin and Rinu Boney.
 
@@ -34,9 +34,9 @@ Main requirements:
 
 ## Preliminary results
 
-MoveToBeacon: 120k steps, average asymptotic score 26 (target to reach\*: 26)
-CollectMineralShards: 3.6M steps, average asymptotic score 94 (target to reach\*: 103)
-FindAndDefeatZerglings: 3.6M steps, average asymptotic score 43 (target to reach\*: 45)
+MoveToBeacon: 120k steps, average asymptotic score 26 (target to reach\*: 26) <br>
+CollectMineralShards: 3.6M steps, average asymptotic score 94 (target to reach\*: 103) <br>
+FindAndDefeatZerglings: 3.6M steps, average asymptotic score 43 (target to reach\*: 45) <br>
 
 \*based on results from StarCraft II: A New Challenge for Reinforcement Learning (https://arxiv.org/abs/1708.04782) for the FullyConv agent.
 
