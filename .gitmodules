@@ -1,0 +1,3 @@
+[submodule "ConvLSTM_pytorch"]
+	path = ConvLSTM_pytorch
+	url = git@github.com:nicoladainese96/ConvLSTM_pytorch.git
