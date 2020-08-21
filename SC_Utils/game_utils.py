@@ -248,7 +248,7 @@ class IMPALA_ObsProcesser(FullObsProcesser):
         action_mask = ~torch.tensor([a in available_actions for a in self.action_table], dtype=torch.bool)
         return action_mask
     
-class IMPALA_ObsProcesser_v1(IMPALA_ObsProcesser):
+class IMPALA_ObsProcesser_v2(IMPALA_ObsProcesser):
     def __init__(self, env, action_table, screen_names=[], minimap_names=[], select_all=False):
         super().__init__(action_table, screen_names, minimap_names, select_all)
         # Used to tile binary masks to screen and minimap layers depending on where the last action acted
@@ -304,7 +304,7 @@ class IMPALA_ObsProcesser_v1(IMPALA_ObsProcesser):
         player_channels = len(self.useful_indexes)
         return screen_channels+1, minimap_channels+1, player_channels
     
-    @static_method
+    @staticmethod
     def check_if_screen(env, sc_env_action, screen=True):
         """
         If screen=True checks if sc_env_action acts on the screen.

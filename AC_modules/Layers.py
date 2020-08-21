@@ -126,6 +126,24 @@ class ResidualConvolutional(nn.Module):
     def forward(self, x):
         x = self.net(x) + x
         return x 
+
+class ResidualConvLayer(nn.Module):
+    
+    def __init__(self, res, n_channels, kernel_size=3):
+        super(ResidualConvLayer, self).__init__()
+        
+        padding = (kernel_size - 1) // 2
+        assert (kernel_size - 1) % 2 == 0, 'Provide odd kernel size to use this layer'
+        
+        # pre-activations as in Identity Mappings in Deep Residual Networks https://arxiv.org/abs/1603.05027
+        self.net = nn.Sequential(
+                                nn.ReLU(),
+                                nn.Conv2d(n_channels, n_channels, kernel_size, stride=1, padding=padding),
+                                )
+        
+    def forward(self, x):
+        x = self.net(x) + x
+        return x 
     
 ### GatedTransformer for the attention/relational block ###
 class PositionwiseFeedForward(nn.Module):

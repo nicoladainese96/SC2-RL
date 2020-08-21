@@ -161,3 +161,116 @@ class Environment:
 
     def close(self):
         self.env.close()
+
+class Environment_v2(Environment):
+    
+    def unpack_obs(self, obs):
+        state_dict, _ = self.obs_processer.get_state(obs)  # returns (state_dict, names_dict)
+        screen = state_dict['screen_layers']
+        minimap = state_dict['minimap_layers']
+        player = state_dict['player_features']
+        reward = obs[0].reward
+        done = obs[0].last()
+        
+        last_action = obs[0].observation['last_actions']
+        if len(last_action) == 0:
+            last_action = 0
+        else:
+            last_action = last_action[0]
+        last_action_idx = np.where(self.obs_processer.action_table == last_action)[0]
+        action_mask = self.obs_processer.get_action_mask(obs[0].observation.available_actions)
+        return screen, minimap, player_state, last_action_idx, reward, done, action_mask
+    
+    def initial(self):
+        initial_reward = torch.zeros(1, 1)
+        initial_done = torch.zeros(1, 1, dtype=torch.uint8) # mine modification 
+        initial_boostrap = torch.zeros(1, 1, dtype=torch.uint8)
+        screen, minimap, player_state, last_action, reward, done, action_mask = self.reset() # action_mask is already a tensor
+        screen, minimap, player, last_action = self._format_state(screen, minimap, player, last_action)
+        
+        return dict(
+            screen_layers=screen, 
+            minimap_layers=minimap,
+            player_state=player_state,
+            screen_layers_trg=screen, 
+            minimap_layers_trg=minimap,
+            player_state_trg=player_state,
+            action_mask=action_mask,
+            last_action=last_action,
+            reward=initial_reward,
+            done=initial_done,
+            bootstrap=initial_boostrap,
+            episode_return=self.episode_return,
+            episode_step=self.episode_step
+        )
+    
+    def step(self, action):
+        """
+        Define action as [pysc2.actions.FunctionCall(action_id, [[arg1], [arg2], ...]]
+        (Wrap it around a list)
+        
+        Notes
+        -----
+        - Automatically reset environment if a step is terminal
+        - Everything is returned as tensors
+        - spatial and player returned separately
+        - All state tensors have been already processed by FullObsProcesser
+        - state_trg[t+1] can be used to bootstrap the value for state[t] as 
+          V(state[t]) = reward[t] + (done[t]+bootstrap[t])*discount*V(state_trg[t+1])
+        - state[t] is equal to state_trg[t] if state_trg[t] wasn't terminal, otherwise
+          is the state obtained by resetting the environment. Used to get current state
+          value and to sample actions for next step.
+        - bootstrap is used to signal steps in which done=True but only because of a time
+          truncation, so we actually need to take into account the value of the last target state.
+        """
+        obs = self.env.step(actions=action) 
+        screen_trg, minimap_trg, player_state_trg, last_action, reward, done, action_mask = self.unpack_obs(obs) 
+        screen_trg, minimap_trg, player_state_trg, last_action = self._format_state(screen_trg, 
+                                                                                    minimap_trg, 
+                                                                                    player_state_trg, 
+                                                                                    last_action) 
+        self.episode_step += 1
+        self.episode_return += reward
+        episode_step = self.episode_step
+        episode_return = self.episode_return
+        if done:
+            if self.episode_step == 240:
+                bootstrap = torch.tensor(True).view(1, 1) # time truncation
+            else:
+                bootstrap = torch.tensor(False).view(1, 1) # real end
+            # only case in which spatial_state cannot be used for bootstrapping
+            # because belongs to a new trajectory
+            screen, minimap, player_state, last_action, _, _, action_mask = self.reset()
+            screen, minimap, player_state, last_action = _format_state(screen, minimap, player_state, last_action) 
+        else:
+            # already formatted
+            bootstrap = torch.tensor(False).view(1, 1) # default case
+            screen = screen_trg
+            minimap = minimap_trg
+            player_state = player_state_trg
+        
+        reward = torch.tensor(reward).view(1, 1)
+        done = torch.tensor(done).view(1, 1)
+        return dict(
+            screen_layers=screen, 
+            minimap_layers=minimap,
+            player_state=player_state,
+            screen_layers_trg=screen_trg, 
+            minimap_layers_trg=minimap_trg,
+            player_state_trg=player_state_trg,
+            action_mask=action_mask,
+            last_action=last_action,
+            reward=reward,
+            done=done,
+            bootstrap=boostrap,
+            episode_return=self.episode_return,
+            episode_step=self.episode_step
+        )
+    
+    @staticmethod
+    def _format_state(screen, minimap, player, last_action):
+        screen = torch.from_numpy(screen).float()
+        minimap = torch.from_numpy(minimap).float()
+        player = torch.from_numpy(player).float()
+        last_action = torch.LongTensor(last_action)
+        return screen, minimap, player, last_action

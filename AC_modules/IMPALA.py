@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from torch.distributions import Categorical
 
 from AC_modules.Networks import *
-from AC_modules.ActorCriticArchitecture import ParallelActorCritic
+from AC_modules.ActorCriticArchitecture import ParallelActorCritic, ParallelActorCritic_v2
 
 from pysc2.lib import actions as sc_actions
 
@@ -331,5 +331,213 @@ class IMPALA_AC(ParallelActorCritic):
         padding = torch.ones(length-len(t), dtype=torch.int64)*-1
         padded_t = torch.cat([t, padding])
         return padded_t
+    
+##############################################################################################################################
+
+class IMPALA_AC_v2(ParallelActorCritic_v2, IMPALA_AC):
+    def __init__(
+        self, 
+        env,
+        action_names,
+        screen_channels, 
+        minimap_channels,
+        encoding_channels,
+        in_player,
+        device
+    ):
+        """
+        Notes:
+        
+        - ParallelActorCritic_v2 takes the precedence over IMPALA_AC in the inheritance of 
+        methods and attributes in case of conflict (e.g. self.pi and self.V_critic)
+        
+        - From IMPALA_AC we keep 
+            sample_spatial_params, 
+            sample_categorical_params, 
+            sample_params,
+            pad_to_len
+            
+        """
+        ParallelActorCritic_v2.__init__(self, 
+                                        env,
+                                        action_names,
+                                        screen_channels, 
+                                        minimap_channels,
+                                        encoding_channels,
+                                        in_player
+                                       )
+        self.device = device 
+        
+        # number of categorical and spatial arguments that we expect at most for any action 
+        # used for padding arguments and writing them into the buffers always with the same length
+        
+        self.max_num_categorical_args = int((self.categorical_arg_mask).sum(axis=1).max()) # should be 1
+        self.max_num_spatial_args = int((self.spatial_arg_mask).sum(axis=1).max()) # should be 2 because of select_rect
+        
+    def actor_step(self, env_output, hidden_state=None, cell_state=None):
+        screen_layers = env_output['screen_layers'].to(self.device)
+        minimap_layers = env_output['minimap_layers'].to(self.device)
+        done = env_output['done'].to(self.device).view(1,1)
+        player_state = env_output['player_state'].unsqueeze(0).to(self.device)
+        last_action = env_output['last_action'].to(self.device) # add it to the output of the environment
+        action_mask = env_output['action_mask'].to(self.device)
+
+        # add time and batch dimension 
+        screen_layers = screen_layers.view(1,1,*screen_layers.shape[-3:])
+        minimap_layers = minimap_layers.view(1,1,*minimap_layers.shape[-3:])
+        
+        results = self.compute_features(screen_layers, 
+                                        minimap_layers, 
+                                        player_state, 
+                                        last_action, 
+                                        hidden_state, 
+                                        cell_state
+                                       )
+        spatial_features, shared_features, hidden_state, cell_state = results
+        
+        log_probs = self.pi(shared_features, action_mask)
+        probs = torch.exp(log_probs)
+        main_action_torch = Categorical(probs).sample() # check probs < 0?!
+        main_action = main_action_torch.detach().cpu().numpy()
+        log_prob = log_probs[range(len(main_action)), main_action]
+        
+        args, args_log_prob, args_indexes = self.sample_params(shared_features, spatial_features, main_action)
+        assert args_log_prob.shape == log_prob.shape, ("Shape mismatch between arg_log_prob and log_prob ",\
+                                                      args_log_prob.shape, log_prob.shape)
+        log_prob = log_prob + args_log_prob
+        
+        action_id = np.array([self.action_table[act] for act in main_action])
+        sc2_env_action = [sc_actions.FunctionCall(action_id[i], args[i]) for i in range(len(action_id))]
+        
+        actor_output = {'log_prob':log_prob.flatten(),
+                        'main_action':main_action_torch.flatten(),
+                        'sc_env_action':sc2_env_action,
+                        **args_indexes} # args_indexes = {'categorical_args_indexes', 'spatial_args_indexes'}
+        
+        return actor_output, (hidden_state, cell_state)
+    
+    def learner_step(self, batch, initial_agent_state):
+        """
+        batch contains tensors of shape (T, B, *other_dims), where 
+        - T = unroll_length (number of steps in the trajectory)
+        - B = batch_size
+        
+        Keywords needed:
+        - spatial_state
+        - player_state
+        - spatial_state_trg
+        - player_state_trg
+        - action_mask
+        - main_action
+        - categorical_indexes
+        - spatial_indexes
+        """
+        screen_layers = batch['screen_layers'].to(self.device)
+        minimap_layers = batch['minimap_layers'].to(self.device)
+        player_state = batch['player_state'].to(self.device)
+        done = batch['done'].to(self.device)
+        
+        screen_layers_trg = batch['screen_layers_trg'].to(self.device)
+        minimap_layers_trg = batch['minimap_layers_trg'].to(self.device)
+        player_state_trg = batch['player_state_trg'].to(self.device)
+        last_action = batch['last_action'].to(self.device)
+        action_mask = batch['action_mask'].to(self.device)
+        
+        main_action = batch['main_action'].to(self.device)
+        categorical_indexes = batch['categorical_indexes'].to(self.device)
+        spatial_indexes = batch['spatial_indexes'].to(self.device)
+        # these don't have a time dimension and come from a different source than batch
+        hidden_states = initial_agent_state[0]
+        cell_states = initial_agent_state[1]
+        
+        if debug:
+            print("screen_layers.shape ", screen_layers.shape)
+            print("minimap_layers.shape ", minimap_layers.shape)
+            print("player_state.shape ", player_state.shape)
+            print("last_action.shape ", last_action.shape)
+            print("action_mask.shape ", action_mask.shape)
+            print("main_action.shape ", main_action.shape)
+            print("categorical_indexes.shape ", categorical_indexes.shape)
+            print("spatial_indexes.shape ", spatial_indexes.shape)
+            print("hidden_states.shape ", hidden_states.shape)
+            print("cell_states.shape ", cell_states.shape)
+            print("self.device ", self.device)
+            
+        # useful dimensions
+        T = screen_layers.shape[0]
+        B = screen_layers.shape[1]
+        res = self.screen_res[0]
+        
+        # merge all batch and time dimensions for all variables except screen_layers, sminimap_layers & done
+        player_state = player_state.view((-1,)+player_state.shape[2:])
+        player_state_trg = player_state_trg.view((-1,)+player_state_trg.shape[2:])
+        last_action = last_action.view((-1,)+last_action.shape[2:])
+        action_mask = action_mask.view((-1,)+action_mask.shape[2:])
+        
+        main_action = main_action.view((-1,)+main_action.shape[2:])
+        categorical_indexes = categorical_indexes.view((-1,)+categorical_indexes.shape[2:])
+        spatial_indexes = spatial_indexes.view((-1,)+spatial_indexes.shape[2:])
+        
+            
+        #print("learner action_mask: ", action_mask)
+        #print("main_action: ", main_action)
+        #print("action_mask[range(len(main_action)), main_action] ", action_mask[range(len(main_action)), main_action])
+        results = self.compute_features(screen_layers, 
+                                        minimap_layers, 
+                                        player_state, 
+                                        last_action, 
+                                        hidden_state, 
+                                        cell_state
+                                       )
+        spatial_features, shared_features, unused_hidden_state, unused_cell_state = results
+        
+        log_probs = self.pi(shared_features, action_mask)
+        #print("learner log_probs: ", log_probs)
+        log_prob = log_probs[range(len(main_action)), main_action]
+        #print("learner log_prob: ", log_prob)
+        entropy = torch.sum(torch.exp(log_prob) * log_prob) # negative entropy of the main actions
+        
+        categorical_log_probs = self.categorical_params_net.get_log_probs(shared_features)\
+            .view(B*T, self.n_categorical_args, self.categorical_params_net.max_size)
+        # self.categorical_arg_mask numpy array -> convert it on the fly to cuda tensor
+        # main_action cuda tensor
+        # categorical_mask should be cuda tensor
+        categorical_arg_mask = torch.tensor(self.categorical_arg_mask).to(self.device)
+        categorical_mask = categorical_arg_mask[main_action,:].view(-1,self.n_categorical_args)
+        categorical_indexes = categorical_indexes[categorical_indexes!=-1] # remove padding
+        batch_index = categorical_mask.nonzero()[:,0]
+        arg_index = categorical_mask.nonzero()[:,1]
+        categorical_log_prob = categorical_log_probs[batch_index, arg_index, categorical_indexes]
+        log_prob = log_prob.index_add(0, batch_index, categorical_log_prob)
+        
+        # repeat for spatial params
+        spatial_log_probs = self.spatial_params_net.get_log_probs(spatial_features)\
+            .view(B*T, self.n_spatial_args, res**2)
+        spatial_arg_mask = torch.tensor(self.spatial_arg_mask).to(self.device)
+        spatial_mask = spatial_arg_mask[main_action,:].view(-1,self.n_spatial_args)
+        spatial_indexes = spatial_indexes[spatial_indexes!=-1] # remove padding
+        batch_index = spatial_mask.nonzero()[:,0]
+        arg_index = spatial_mask.nonzero()[:,1]
+        spatial_log_prob = spatial_log_probs[batch_index, arg_index, spatial_indexes]
+        log_prob = log_prob.index_add(0, batch_index, spatial_log_prob)
+        
+        baseline = self.V_critic(shared_features)
+        
+        # change this
+        results_trg = self.compute_features(screen_layers_trg, 
+                                        minimap_layers_trg, 
+                                        player_state_trg, 
+                                        last_action, 
+                                        hidden_state, 
+                                        cell_state
+                                       )
+        spatial_features_trg, shared_features_trg, unused_hidden_state, unused_cell_state = results_trg
+        
+        baseline_trg = self.V_critic(shared_features_trg)
+        
+        return dict(log_prob=log_prob.view(T,B), 
+                    baseline=baseline.view(T,B), 
+                    baseline_trg=baseline_trg.view(T,B), 
+                    entropy=entropy)
 
         

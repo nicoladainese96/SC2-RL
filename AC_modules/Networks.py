@@ -1,4 +1,5 @@
 from AC_modules.Layers import *
+from ConvLSTM_pytorch.convlstm import ConvLSTM
 
 import numpy as np
 import torch 
@@ -437,6 +438,245 @@ class SpatialIMPALA(ParallelSpatialParameters):
         log_probs = F.log_softmax(x, dim=(-1))
         return log_probs
     
+
+        
+#############################################################################################################################
+
+### Big architecture IMPALA (v2) ###
+# StateEncodingConvBlock
+# ConvLSTM_RL
+# ResidualConvLayer (in AC_modules.Layers)
+# ResidualConvBlock
+# DeepResidualBlock
+# NonSpatialBlock
+# Inputs2D_Net
+# SpatialProcessingBlock
+# SpatialIMPALA_v2
+
+class StateEncodingConvBlock(nn.Module):
+    """ 
+    - First conv layer halves the spatial dimensions
+    - 2 residual convolutional layers with ReLU pre-activations (they act on the input and not the output)
+    - 2x2 MaxPool to halve again the dimensions
+    """
+    def __init__(self, res, in_channels, out_channels, kernel_size=4, stride=2, padding=1):
+        super(StateEncodingConvBlock, self).__init__()
+        new_res = (res - kernel_size + 2*padding)//stride + 1
+        self.new_res = new_res # useful info to access from outside the class
+        self.net = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=padding),
+            ResidualConvLayer(new_res, out_channels, kernel_size=3),
+            ResidualConvLayer(new_res, out_channels, kernel_size=3),
+            nn.MaxPool2d(2),
+        )
+        
+    def forward(self, x):
+        return self.net(x)
+    
+class ConvLSTM_RL(ConvLSTM):
+    def forward(self, input_tensor, hidden_state=None, done=None):
+        """
+
+        Parameters
+        ----------
+        input_tensor: 
+            5-D Tensor either of shape (t, b, c, h, w) or (b, t, c, h, w)
+        hidden_state: 
+            list of tuples [(hidden,cell), ..., (hidden,cell)] with 
+            length of the list = num_layers
+            hidden.shape == cell.shape == (b, c, h, w)
+        done:
+            Tensor of shape (t,b) 
+            
+        Returns
+        -------
+        last_state_list, layer_output
+        """
+        if not self.batch_first:
+            # (t, b, c, h, w) -> (b, t, c, h, w)
+            input_tensor = input_tensor.permute(1, 0, 2, 3, 4)
+
+        b, t, c, h, w = input_tensor.size()
+
+        if hidden_state is None:
+        # Since the init is done in forward. Can send image size here
+            hidden_state = self._init_hidden(batch_size=b,
+                                             image_size=(h, w))
+
+        
+        if done is None:
+            device = self.cell_list[0].conv.weight.device
+            notdone = torch.ones(t, b, c, h, w).float().to(device)
+        else:
+            notdone = (~done).float().view(t, b, 1, 1, 1) #for broadcasting
+            
+        layer_output_list = []
+        last_state_list = []
+
+        seq_len = input_tensor.size(1)
+        cur_layer_input = input_tensor
+
+        for layer_idx in range(self.num_layers):
+
+            h, c = hidden_state[layer_idx]
+            output_inner = []
+            for t in range(seq_len):
+                # reset hidden state to zero whenever an episode ended
+                # done is saying that this input is from a new episode
+                h = h*notdone[t] # (b,c,w,h) * (b,c,w,h)  [or (b,1,1,1)]
+                c = c*notdone[t]
+                h, c = self.cell_list[layer_idx](input_tensor=cur_layer_input[:, t, :, :, :],
+                                                 cur_state=[h, c])
+                output_inner.append(h)
+                
+            layer_output = torch.stack(output_inner, dim=1)
+            cur_layer_input = layer_output
+
+            layer_output_list.append(layer_output)
+            last_state_list.append([h, c])
+
+        if not self.return_all_layers:
+            layer_output_list = layer_output_list[-1:]
+            last_state_list = last_state_list[-1:]
+
+        return layer_output_list, last_state_list
+    
+class ResidualConvBlock(nn.Module):
+    def __init__(self, in_channels, res):
+        super(ResidualConvBlock, self).__init__()
+        # pre-activations as in Identity Mappings in Deep Residual Networks https://arxiv.org/abs/1603.05027
+        self.net = nn.Sequential(
+            ResidualConvLayer(res, in_channels, kernel_size=5),
+            ResidualConvLayer(res, in_channels, kernel_size=3),
+            ResidualConvLayer(res, in_channels, kernel_size=3)
+        )
+        
+    def forward(self, x):
+        return self.net(x)
+    
+class DeepResidualBlock(nn.Module):
+    def __init__(self, in_channels, res, n_blocks=3):
+        super(DeepResidualBlock, self).__init__()
+        self.net = nn.Sequential(
+            *[ResidualConvBlock(in_channels, res) for _ in range(n_blocks)]
+        )
+        
+    def forward(self, x):
+        x = x.view(-1, in_channels, res, res)
+        return self.net(x)
+    
+class NonSpatialBlock(nn.Module):
+    def __init__(self, in_channels, res):
+        super(NonSpatialBlock, self).__init__()
+        self.flattened_size = in_channels*(res**2)
+        self.out_features = 512
+        self.net = nn.Sequential(
+            nn.Linear(self.flattened_size, 512),
+            nn.ReLU(),
+            nn.Linear(512,512),
+            nn.ReLU()
+        )
+    
+    def forward(self, x):
+        x = x.view(-1, self.flattened_size)
+        return self.net(x)
+    
+class Inputs2D_Net(nn.Module):
+    def __init__(
+        self, 
+        in_player, 
+        n_actions, 
+        embedding_dim=10
+    ):
+        super(Inputs2D_Net, self).__init__()
+        self.out_features = 64 # in case needed from outside
+        self.embedding = nn.Embedding(n_actions, embedding_dim, padding_idx=0) # no_op action mapped to 0
+        self.MLP = nn.Sequential(
+            nn.Linear(in_player+embedding_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64),
+            nn.ReLU()
+        )
+        
+    def forward(self, player_info, last_action):
+        """
+        player_info: (batch, in_player)
+        last_action: (batch,)
+        """
+        embedded_action = self.embedding(last_action).float()
+        nonspatial_input = torch.cat([player_info, embedded_action], dim=1)
+        out = self.MLP(nonspatial_input)
+        return out
+    
+class SpatialProcessingBlock(nn.Module):
+    def __init__(
+        self, 
+        res, 
+        screen_channels, 
+        minimap_channels,
+        encoding_channels,
+        lstm_channels=96,
+    ):
+        assert res%4 == 0, "Provide an input with resolution divisible by 4"
+        self.res = res
+        self.new_res = res/4
+        self.lstm_channels = lstm_channels
+        self.screen_state_enc_net = StateEncodingConvBlock(res, screen_channels, encoding_channels)
+        self.minimap_state_enc_net = StateEncodingConvBlock(res, minimap_channels, encoding_channels)
+        self.conv_lsmt = ConvLSTM_RL(
+                     encoding_channels*2, 
+                     lstm_channels, 
+                     kernel_size=3, 
+                     num_layers=1,
+                     batch_first=False, # first time dimension, but return is with batch first
+                     bias=True,
+                     return_all_layers=True
+                    )
+        self.deep_residual_block = DeepResidualBlock(lstm_channels, self.new_res)
+        self.nonspatial_block = NonSpatialBlock(lstm_channels, self.new_res)
+        
+    def forward(self, screen_layers, minimap_layers, hidden_state=None, cell_state=None, done=None):
+        """
+        Inputs
+        ------
+        screen_layers: (batch_size, screen_channels, res, res)
+        minimap_layers: (batch_size, minimap_channels, res, res)
+        hidden_state: (batch_size, lstm_channels, new_res, new_res)
+        cell_state: (batch_size, lstm_channels, new_res, new_res)
+        
+        Intermediate variables
+        ----------------------
+        inputs_3D: (batch_size, encoding_channels*2, new_res, new_res)
+        """
+        # State Encoding
+        screen_enc = self.screen_state_enc_net(screen_layers)
+        minimap_enc = self.minimap_state_enc_net(minimap_layers)
+        inputs_3D = torch.cat([screen_enc, minimap_enc], dim=1) # concatenate along channel dim
+        
+        # Memory Processing
+        if hidden_state is None:
+            layer_output_list, last_state_list = self.conv_lsmt(inputs_3D, done=done)
+        else:
+            assert cell_state is not None, \
+                "hidden_state provided, but cell_state is None"
+            assert hidden_state.shape == cell_state.shape, \
+                ("hidden_state and cell_state have different shapes", hidden_state.shape, cell_state.shape)
+            layer_output_list, last_state_list = self.conv_lsmt(inputs_3D,
+                                                                [(hidden_state, cell_state)], 
+                                                                done=done
+                                                               )
+        # output is 5d with batch-first 
+        outputs_3D = layer_output_list[-1].transpose(1,0) # (t,b,c,w,h)
+        # this works only if num_layers = 1
+        hidden_state = last_state_list[-1][0]
+        cell_state = last_state_list[-1][1]
+        
+        # Spatial and Non-Spatial Processing
+        spatial_features = self.deep_residual_block(outputs_3D) # (t*b, c, w, h) 
+        nonspatial_features = self.nonspatial_block(outputs_3D) # (t*b, n_features)
+        
+        return spatial_features, nonspatial_features, hidden_state, cell_state
+    
 class SpatialIMPALA_v2(SpatialIMPALA):
     """
     Same as SpatialIMPALA, but handles inputs of linear size 4 times smaller than the output size,
@@ -457,7 +697,7 @@ class SpatialIMPALA_v2(SpatialIMPALA):
             nn.Conv2d(16, n_arguments, kernel_size=3, stride=1, padding=1)
         )
         
-    
+#############################################################################################################################
 class ConditionedSpatialParameters(nn.Module):
     
     def __init__(self, linear_size):

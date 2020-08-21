@@ -41,6 +41,43 @@ class SharedCritic(nn.Module):
         V = self.net(shared_repr)
         return V
     
+class ActorHead(nn.Module):
+    def __init__(
+        self, 
+        n_actions, 
+        n_shared_features=576
+    ):
+        super(ActorHead, self).__init__()
+        self.n_actions = n_actions
+        
+        self.actor_net = nn.Sequential(
+            nn.Linear(n_shared_features, 256),
+            nn.ReLU(),
+            nn.Linear(256, n_actions)
+        )
+    
+    def forward(self, shared_features, mask):
+        logits = self.actor_net(shared_features)
+        log_probs = F.log_softmax(logits.masked_fill((mask).bool(), float('-inf')), dim=-1) 
+        return log_probs
+
+    
+class CriticHead(nn.Module):
+    def __init__(
+        self, 
+        n_shared_features=576
+    ):
+        super(CriticHead, self).__init__()
+        
+        self.critic_net = nn.Sequential(
+            nn.Linear(n_shared_features, 256),
+            nn.ReLU(),
+            nn.Linear(256, 1)
+        )
+    
+    def forward(self, shared_features):
+        return self.critic_net(shared_features)
+    
 ########################################################################################################################
 
 class SpatialActorCritic(nn.Module):
@@ -485,6 +522,95 @@ class ParallelActorCritic(nn.Module):
             arg_list.append(args)
             
         return arg_list, log_prob
+    
+########################################################################################################################
+    
+class ParallelActorCritic_v2(ParallelActorCritic, nn.Module):
+    """
+    Uses as hard-coded architecture the control architecture of paper 
+    Relational Deep Reinforcement Learning [https://arxiv.org/abs/1806.01830]
+    """
+    def __init__(
+        self, 
+        env,
+        action_names,
+        screen_channels, 
+        minimap_channels,
+        encoding_channels,
+        in_player
+    ):
+        # init nn.Module but not ParallelActorCritic 
+        nn.Module.__init__(self)
+        
+        self.action_names = action_names
+        self._set_action_table() # creates self.action_table
+        self.screen_res = env.observation_spec()[0]['feature_screen'][1:]
+        self.all_actions = env.action_spec()[0][1]
+        self.all_arguments = env.action_spec()[0][0]
+        self.action_space = len(action_names)
+        
+        # Networks
+        self.spatial_processing_block = SpatialProcessingBlock(self.screen_res, 
+                                                               screen_channels, 
+                                                               minimap_channels,
+                                                               encoding_channels
+                                                              )
+        self.inputs2d_net = Inputs2D_Net(in_player, self.action_space)
+        
+        n_shared_features = self.spatial_processing_block.NonSpatialBlock.out_features + \
+                            self.inputs2d_net.out_features
+        
+        self.actor = ActorHead(self.action_space, n_shared_features)
+        self.critic = CriticHead(n_shared_features)
+        
+        # take care of computing some useful arguments-related attributes before initializing argument networks
+        self._init_arg_names()
+        self._set_spatial_arg_mask()
+        self._set_categorical_arg_mask()
+        
+        self.spatial_params_net = SpatialIMPALA_v2(self.spatial_processing_block.lstm_channels,
+                                                   self.screen_res[0], 
+                                                   self.n_spatial_args
+                                                  )
+        self.categorical_params_net = CategoricalIMPALA(n_shared_features, 
+                                                        self.categorical_sizes, 
+                                                        self.n_categorical_args
+                                                       )
+        
+    def compute_features(
+        self,
+        screen_layers, 
+        minimap_layers, 
+        player_info, 
+        last_action, 
+        hidden_state, 
+        cell_state,
+        done
+    ):
+        """
+        screen_layers, minimap_layers: (t, b, c, w, h)
+        player_info: (t*b, in_player)
+        last_action: (t*b,)
+        hidden_state: (b, c, w, h)
+        cell_state: (b, c, w, h)
+        done: (t*b,)
+        """
+        results = self.spatial_processing_block(screen_layers, minimap_layers, hidden_state, cell_state, done)
+        spatial_features, nonspatial_features, hidden_state, cell_state = results
+        # spatial_features and nonspatial_features have already merged (t,b,...) -> (t*b,...)
+        inputs_2D = self.inputs2d_net(player_info, last_action)
+        
+        shared_features = torch.cat([nonspatial_features, inputs_2D], dim=1)
+        
+        return spatial_features, shared_features, hidden_state, cell_state
+    
+    def pi(self, shared_features, action_mask):
+        logits = self.actor(shared_features) 
+        log_probs = F.log_softmax(logits.masked_fill((action_mask).bool(), float('-inf')), dim=-1) 
+        return log_probs
+    
+    def V_critic(self, shared_features):
+        return self.critic(shared_features)
     
 ########################################################################################################################
 
