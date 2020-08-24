@@ -13,7 +13,7 @@ _MOVE_SCREEN = sc_actions.FUNCTIONS.Attack_screen.id
 
 debug = False
 
-### Shared ActorCritic architecture
+# ## Shared ActorCritic architecture
 
 class SharedActor(nn.Module):
     def __init__(self, action_space, n_features):
@@ -27,7 +27,7 @@ class SharedActor(nn.Module):
     def forward(self, shared_repr):
         logits = self.linear(shared_repr)
         return logits
-    
+
 class SharedCritic(nn.Module):
     def __init__(self, n_features):
         super(SharedCritic, self).__init__()
@@ -40,7 +40,7 @@ class SharedCritic(nn.Module):
     def forward(self, shared_repr):
         V = self.net(shared_repr)
         return V
-    
+
 class ActorHead(nn.Module):
     def __init__(
         self, 
@@ -61,7 +61,7 @@ class ActorHead(nn.Module):
         log_probs = F.log_softmax(logits.masked_fill((mask).bool(), float('-inf')), dim=-1) 
         return log_probs
 
-    
+
 class CriticHead(nn.Module):
     def __init__(
         self, 
@@ -77,9 +77,8 @@ class CriticHead(nn.Module):
     
     def forward(self, shared_features):
         return self.critic_net(shared_features)
-    
-########################################################################################################################
 
+""
 class SpatialActorCritic(nn.Module):
     """
     Used in SpatialA2C
@@ -158,8 +157,7 @@ class SpatialActorCritic(nn.Module):
         """
         return self.arguments_networks[arg_name](state_rep)
 
-########################################################################################################################
-
+""
 class SpatialActorCritic_v1(SpatialActorCritic):
     """
     Used in SpatialActorCritic_v1
@@ -200,9 +198,8 @@ class SpatialActorCritic_v1(SpatialActorCritic):
         self.arguments_networks = nn.ModuleDict(arguments_networks)
         
         return
-    
-########################################################################################################################
 
+""
 class SpatialActorCritic_v2(SpatialActorCritic):
     """
     Used in SpatialA2C_v2, SpatialA2C_MaxEnt and SpatialA2C_MaxEnt_v2 - compatible with SpatialA2C too
@@ -245,7 +242,7 @@ class SpatialActorCritic_v2(SpatialActorCritic):
         self.arguments_networks = nn.ModuleDict(arguments_networks)
         
         return
-    
+
 class SpatialActorCritic_v3(SpatialActorCritic):
     """
     Used in SpatialActorCritic_v3
@@ -295,8 +292,7 @@ class SpatialActorCritic_v3(SpatialActorCritic):
         return self.arguments_networks[arg_name](*args)
 
 
-########################################################################################################################
-
+""
 class SpatialActorCritic_v4(SpatialActorCritic_v2):
     """
     Used in FullSpaceA2C
@@ -319,9 +315,8 @@ class SpatialActorCritic_v4(SpatialActorCritic_v2):
         nonspatial_features = self.nonspatial_features_net(spatial_features)
         V = self.critic(nonspatial_features)
         return V
-    
-########################################################################################################################
 
+""
 class ParallelActorCritic(nn.Module):
     """
     Used in FullSpaceA2C_v2
@@ -522,9 +517,8 @@ class ParallelActorCritic(nn.Module):
             arg_list.append(args)
             
         return arg_list, log_prob
-    
-########################################################################################################################
-    
+
+""
 class ParallelActorCritic_v2(ParallelActorCritic, nn.Module):
     """
     Uses as hard-coded architecture the control architecture of paper 
@@ -550,14 +544,14 @@ class ParallelActorCritic_v2(ParallelActorCritic, nn.Module):
         self.action_space = len(action_names)
         
         # Networks
-        self.spatial_processing_block = SpatialProcessingBlock(self.screen_res, 
+        self.spatial_processing_block = SpatialProcessingBlock(self.screen_res[0], 
                                                                screen_channels, 
                                                                minimap_channels,
                                                                encoding_channels
                                                               )
         self.inputs2d_net = Inputs2D_Net(in_player, self.action_space)
         
-        n_shared_features = self.spatial_processing_block.NonSpatialBlock.out_features + \
+        n_shared_features = self.spatial_processing_block.nonspatial_block.out_features + \
                             self.inputs2d_net.out_features
         
         self.actor = ActorHead(self.action_space, n_shared_features)
@@ -595,6 +589,9 @@ class ParallelActorCritic_v2(ParallelActorCritic, nn.Module):
         cell_state: (b, c, w, h)
         done: (t*b,)
         """
+        #if hidden_state is not None:
+        #    print("hidden_state.shape: ", hidden_state.shape)
+        #    print("cell_state.shape: ", cell_state.shape)
         results = self.spatial_processing_block(screen_layers, minimap_layers, hidden_state, cell_state, done)
         spatial_features, nonspatial_features, hidden_state, cell_state = results
         # spatial_features and nonspatial_features have already merged (t,b,...) -> (t*b,...)
@@ -605,15 +602,12 @@ class ParallelActorCritic_v2(ParallelActorCritic, nn.Module):
         return spatial_features, shared_features, hidden_state, cell_state
     
     def pi(self, shared_features, action_mask):
-        logits = self.actor(shared_features) 
-        log_probs = F.log_softmax(logits.masked_fill((action_mask).bool(), float('-inf')), dim=-1) 
-        return log_probs
+        return self.actor(shared_features, action_mask)
     
     def V_critic(self, shared_features):
         return self.critic(shared_features)
-    
-########################################################################################################################
 
+""
 class FullSpatialActorCritic(nn.Module):
     """
     Uses full action and state space.

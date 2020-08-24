@@ -331,8 +331,8 @@ class IMPALA_AC(ParallelActorCritic):
         padding = torch.ones(length-len(t), dtype=torch.int64)*-1
         padded_t = torch.cat([t, padding])
         return padded_t
-    
-##############################################################################################################################
+
+# #############################################################################################################################
 
 class IMPALA_AC_v2(ParallelActorCritic_v2, IMPALA_AC):
     def __init__(
@@ -391,7 +391,8 @@ class IMPALA_AC_v2(ParallelActorCritic_v2, IMPALA_AC):
                                         player_state, 
                                         last_action, 
                                         hidden_state, 
-                                        cell_state
+                                        cell_state,
+                                        done
                                        )
         spatial_features, shared_features, hidden_state, cell_state = results
         
@@ -447,8 +448,8 @@ class IMPALA_AC_v2(ParallelActorCritic_v2, IMPALA_AC):
         categorical_indexes = batch['categorical_indexes'].to(self.device)
         spatial_indexes = batch['spatial_indexes'].to(self.device)
         # these don't have a time dimension and come from a different source than batch
-        hidden_states = initial_agent_state[0]
-        cell_states = initial_agent_state[1]
+        hidden_state = initial_agent_state[0]
+        cell_state = initial_agent_state[1]
         
         if debug:
             print("screen_layers.shape ", screen_layers.shape)
@@ -459,8 +460,8 @@ class IMPALA_AC_v2(ParallelActorCritic_v2, IMPALA_AC):
             print("main_action.shape ", main_action.shape)
             print("categorical_indexes.shape ", categorical_indexes.shape)
             print("spatial_indexes.shape ", spatial_indexes.shape)
-            print("hidden_states.shape ", hidden_states.shape)
-            print("cell_states.shape ", cell_states.shape)
+            print("hidden_states.shape ", hidden_state.shape)
+            print("cell_states.shape ", cell_state.shape)
             print("self.device ", self.device)
             
         # useful dimensions
@@ -482,12 +483,17 @@ class IMPALA_AC_v2(ParallelActorCritic_v2, IMPALA_AC):
         #print("learner action_mask: ", action_mask)
         #print("main_action: ", main_action)
         #print("action_mask[range(len(main_action)), main_action] ", action_mask[range(len(main_action)), main_action])
+        #print("screen_layers.shape: ",screen_layers.shape)
+        #print("minimap_layers.shape: ", minimap_layers.shape)
+        #print("player_state.shape: ", player_state.shape)
+        #print("last_action.shape: ", last_action.shape)
         results = self.compute_features(screen_layers, 
                                         minimap_layers, 
                                         player_state, 
                                         last_action, 
                                         hidden_state, 
-                                        cell_state
+                                        cell_state,
+                                        done
                                        )
         spatial_features, shared_features, unused_hidden_state, unused_cell_state = results
         
@@ -525,12 +531,13 @@ class IMPALA_AC_v2(ParallelActorCritic_v2, IMPALA_AC):
         
         # change this
         results_trg = self.compute_features(screen_layers_trg, 
-                                        minimap_layers_trg, 
-                                        player_state_trg, 
-                                        last_action, 
-                                        hidden_state, 
-                                        cell_state
-                                       )
+                                            minimap_layers_trg, 
+                                            player_state_trg, 
+                                            last_action, 
+                                            hidden_state, 
+                                            cell_state,
+                                            done
+                                           )
         spatial_features_trg, shared_features_trg, unused_hidden_state, unused_cell_state = results_trg
         
         baseline_trg = self.V_critic(shared_features_trg)

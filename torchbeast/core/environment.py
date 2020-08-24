@@ -179,22 +179,22 @@ class Environment_v2(Environment):
             last_action = last_action[0]
         last_action_idx = np.where(self.obs_processer.action_table == last_action)[0]
         action_mask = self.obs_processer.get_action_mask(obs[0].observation.available_actions)
-        return screen, minimap, player_state, last_action_idx, reward, done, action_mask
+        return screen, minimap, player, last_action_idx, reward, done, action_mask
     
     def initial(self):
         initial_reward = torch.zeros(1, 1)
         initial_done = torch.zeros(1, 1, dtype=torch.uint8) # mine modification 
         initial_boostrap = torch.zeros(1, 1, dtype=torch.uint8)
-        screen, minimap, player_state, last_action, reward, done, action_mask = self.reset() # action_mask is already a tensor
+        screen, minimap, player, last_action, reward, done, action_mask = self.reset() # action_mask is already a tensor
         screen, minimap, player, last_action = self._format_state(screen, minimap, player, last_action)
         
         return dict(
             screen_layers=screen, 
             minimap_layers=minimap,
-            player_state=player_state,
+            player_state=player,
             screen_layers_trg=screen, 
             minimap_layers_trg=minimap,
-            player_state_trg=player_state,
+            player_state_trg=player,
             action_mask=action_mask,
             last_action=last_action,
             reward=initial_reward,
@@ -241,7 +241,7 @@ class Environment_v2(Environment):
             # only case in which spatial_state cannot be used for bootstrapping
             # because belongs to a new trajectory
             screen, minimap, player_state, last_action, _, _, action_mask = self.reset()
-            screen, minimap, player_state, last_action = _format_state(screen, minimap, player_state, last_action) 
+            screen, minimap, player_state, last_action = self._format_state(screen, minimap, player_state, last_action) 
         else:
             # already formatted
             bootstrap = torch.tensor(False).view(1, 1) # default case
@@ -262,9 +262,9 @@ class Environment_v2(Environment):
             last_action=last_action,
             reward=reward,
             done=done,
-            bootstrap=boostrap,
-            episode_return=self.episode_return,
-            episode_step=self.episode_step
+            bootstrap=bootstrap,
+            episode_return=episode_return,#self.episode_return,
+            episode_step=episode_step#self.episode_step
         )
     
     @staticmethod

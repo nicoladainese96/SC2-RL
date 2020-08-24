@@ -60,7 +60,7 @@ class NonSpatialFeatures(nn.Module):
         if debug: print("x.shape: ", x.shape)
         
         return x    
-    
+
 class FullyConvSpatial(nn.Module):
     def __init__(self, in_channels, n_channels=32):
         super(FullyConvSpatial, self).__init__()
@@ -73,7 +73,7 @@ class FullyConvSpatial(nn.Module):
         
     def forward(self, x):
         return self.net(x)
-    
+
 class FullyConvPlayerAndSpatial(nn.Module):
     def __init__(self, in_channels, in_player, player_features, conv_channels=32):
         super(FullyConvPlayerAndSpatial, self).__init__()
@@ -102,7 +102,7 @@ class FullyConvPlayerAndSpatial(nn.Module):
         player_x = player_x.repeat(1,1,res,res)
         spatial_features = torch.cat([spatial_x, player_x], dim=1)
         return spatial_features
-    
+
 class FullyConvNonSpatial(nn.Module):
     def __init__(self, n_features=256, n_channels=32, hidden_channels=64, resolution=16, kernel_size=3, stride=2):
         super(FullyConvNonSpatial, self).__init__()
@@ -122,7 +122,7 @@ class FullyConvNonSpatial(nn.Module):
         x = x.reshape(B,-1) 
         x = self.net(x)
         return x
-        
+
 
 class FullyConvSpatial_v1(nn.Module):
     def __init__(self, in_channels, n_channels=32, resolution=16):
@@ -138,7 +138,7 @@ class FullyConvSpatial_v1(nn.Module):
         
     def forward(self, x):
         return self.net(x)
-    
+
 class FullyConvNonSpatial_v1(nn.Module):
     def __init__(self, n_features=256, n_channels=32, resolution=16):
         super(FullyConvNonSpatial_v1, self).__init__()
@@ -183,7 +183,7 @@ class FullyConvNonSpatial_v2(nn.Module):
         x = self.net(x)
         return x
 
-### NonSpatial networks: start from (batch, n_channels, size, size) and return (batch, n_features) ###
+# ## NonSpatial networks: start from (batch, n_channels, size, size) and return (batch, n_features) ###
 # Usually n_channels = n_features, but can be adapted
 
 class GatedRelationalNet(nn.Module):
@@ -209,7 +209,7 @@ class GatedRelationalNet(nn.Module):
         if debug:
             print("x.shape (BoxWorldNet): ", x.shape)
         return x
-    
+
 class CategoricalNet(nn.Module):
     
     def __init__(self, n_features, size, hiddens=[256]):
@@ -289,7 +289,7 @@ class ParallelCategoricalNet(nn.Module):
                     .view(arg.shape[0], arg.shape[1])
         arg = arg.detach().cpu().numpy()
         return arg, log_prob
-    
+
 class CategoricalIMPALA(ParallelCategoricalNet):
     def __init__(
         self, 
@@ -318,8 +318,8 @@ class CategoricalIMPALA(ParallelCategoricalNet):
         self.sizes_mask = self.sizes_mask.to(device)
         log_probs = F.log_softmax(logits.masked_fill(self.sizes_mask.bool(), float('-inf')), dim=(-1)) # sample all arguments in parallel
         return log_probs
-    
-### sample spatial parameters from a matrix-like state representation
+
+# ## sample spatial parameters from a matrix-like state representation
 
 def unravel_index(index, shape):
     out = []
@@ -350,7 +350,7 @@ class SpatialParameters(nn.Module):
             arg_lst = [[yi.item(),xi.item()] for xi, yi in zip(x,y)]
         log_prob = log_probs[torch.arange(B), index]
         return arg_lst, log_prob, log_probs
-    
+
 class ParallelSpatialParameters(nn.Module):
     
     def __init__(self, n_channels, linear_size, n_arguments):
@@ -410,7 +410,7 @@ class ParallelSpatialParameters(nn.Module):
             out.append(index % dim)
             index = index // dim
         return tuple(reversed(out))
-    
+
 class SpatialIMPALA(ParallelSpatialParameters):
     def __init__(self, n_channels, linear_size, n_arguments):
         super(SpatialIMPALA, self).__init__(n_channels, linear_size, n_arguments)
@@ -437,11 +437,10 @@ class SpatialIMPALA(ParallelSpatialParameters):
         x = x.reshape((x.shape[0],self.n_args,-1))
         log_probs = F.log_softmax(x, dim=(-1))
         return log_probs
-    
 
-        
-#############################################################################################################################
 
+
+""
 ### Big architecture IMPALA (v2) ###
 # StateEncodingConvBlock
 # ConvLSTM_RL
@@ -472,7 +471,7 @@ class StateEncodingConvBlock(nn.Module):
         
     def forward(self, x):
         return self.net(x)
-    
+
 class ConvLSTM_RL(ConvLSTM):
     def forward(self, input_tensor, hidden_state=None, done=None):
         """
@@ -540,7 +539,7 @@ class ConvLSTM_RL(ConvLSTM):
             last_state_list = last_state_list[-1:]
 
         return layer_output_list, last_state_list
-    
+
 class ResidualConvBlock(nn.Module):
     def __init__(self, in_channels, res):
         super(ResidualConvBlock, self).__init__()
@@ -553,22 +552,24 @@ class ResidualConvBlock(nn.Module):
         
     def forward(self, x):
         return self.net(x)
-    
+
 class DeepResidualBlock(nn.Module):
     def __init__(self, in_channels, res, n_blocks=3):
         super(DeepResidualBlock, self).__init__()
+        self.in_channels = in_channels
+        self.res = res
         self.net = nn.Sequential(
             *[ResidualConvBlock(in_channels, res) for _ in range(n_blocks)]
         )
         
     def forward(self, x):
-        x = x.view(-1, in_channels, res, res)
+        x = x.reshape(-1, self.in_channels, self.res, self.res)
         return self.net(x)
-    
+
 class NonSpatialBlock(nn.Module):
     def __init__(self, in_channels, res):
         super(NonSpatialBlock, self).__init__()
-        self.flattened_size = in_channels*(res**2)
+        self.flattened_size = int(in_channels*(res**2))
         self.out_features = 512
         self.net = nn.Sequential(
             nn.Linear(self.flattened_size, 512),
@@ -578,9 +579,9 @@ class NonSpatialBlock(nn.Module):
         )
     
     def forward(self, x):
-        x = x.view(-1, self.flattened_size)
+        x = x.reshape(-1, self.flattened_size)
         return self.net(x)
-    
+
 class Inputs2D_Net(nn.Module):
     def __init__(
         self, 
@@ -607,7 +608,7 @@ class Inputs2D_Net(nn.Module):
         nonspatial_input = torch.cat([player_info, embedded_action], dim=1)
         out = self.MLP(nonspatial_input)
         return out
-    
+
 class SpatialProcessingBlock(nn.Module):
     def __init__(
         self, 
@@ -617,16 +618,17 @@ class SpatialProcessingBlock(nn.Module):
         encoding_channels,
         lstm_channels=96,
     ):
+        super(SpatialProcessingBlock, self).__init__()
         assert res%4 == 0, "Provide an input with resolution divisible by 4"
         self.res = res
-        self.new_res = res/4
+        self.new_res = int(res/4)
         self.lstm_channels = lstm_channels
         self.screen_state_enc_net = StateEncodingConvBlock(res, screen_channels, encoding_channels)
         self.minimap_state_enc_net = StateEncodingConvBlock(res, minimap_channels, encoding_channels)
-        self.conv_lsmt = ConvLSTM_RL(
+        self.conv_lstm = ConvLSTM_RL(
                      encoding_channels*2, 
                      lstm_channels, 
-                     kernel_size=3, 
+                     kernel_size=(3,3), 
                      num_layers=1,
                      batch_first=False, # first time dimension, but return is with batch first
                      bias=True,
@@ -639,8 +641,8 @@ class SpatialProcessingBlock(nn.Module):
         """
         Inputs
         ------
-        screen_layers: (batch_size, screen_channels, res, res)
-        minimap_layers: (batch_size, minimap_channels, res, res)
+        screen_layers: (time, batch_size, screen_channels, res, res)
+        minimap_layers: (time, batch_size, minimap_channels, res, res)
         hidden_state: (batch_size, lstm_channels, new_res, new_res)
         cell_state: (batch_size, lstm_channels, new_res, new_res)
         
@@ -648,35 +650,40 @@ class SpatialProcessingBlock(nn.Module):
         ----------------------
         inputs_3D: (batch_size, encoding_channels*2, new_res, new_res)
         """
+        T = screen_layers.shape[0]
+        B = screen_layers.shape[1]
+        # merge T and B dimensions for standard layers
+        screen_layers = screen_layers.view((-1,*screen_layers.shape[-3:]))
+        minimap_layers = minimap_layers.view((-1,*minimap_layers.shape[-3:]))
         # State Encoding
         screen_enc = self.screen_state_enc_net(screen_layers)
         minimap_enc = self.minimap_state_enc_net(minimap_layers)
-        inputs_3D = torch.cat([screen_enc, minimap_enc], dim=1) # concatenate along channel dim
-        
+        # concatenate along channel dim + (T*B,...) -> (T, B, ...)
+        inputs_3D = torch.cat([screen_enc, minimap_enc], dim=1).view(T,B,-1,self.new_res,self.new_res) 
         # Memory Processing
         if hidden_state is None:
-            layer_output_list, last_state_list = self.conv_lsmt(inputs_3D, done=done)
+            layer_output_list, last_state_list = self.conv_lstm(inputs_3D, done=done)
         else:
             assert cell_state is not None, \
                 "hidden_state provided, but cell_state is None"
             assert hidden_state.shape == cell_state.shape, \
                 ("hidden_state and cell_state have different shapes", hidden_state.shape, cell_state.shape)
-            layer_output_list, last_state_list = self.conv_lsmt(inputs_3D,
+            layer_output_list, last_state_list = self.conv_lstm(inputs_3D,
                                                                 [(hidden_state, cell_state)], 
                                                                 done=done
                                                                )
         # output is 5d with batch-first 
-        outputs_3D = layer_output_list[-1].transpose(1,0) # (t,b,c,w,h)
+        outputs_3D = layer_output_list[-1].transpose(1,0) # (T,B,c,w,h)
         # this works only if num_layers = 1
         hidden_state = last_state_list[-1][0]
         cell_state = last_state_list[-1][1]
         
         # Spatial and Non-Spatial Processing
-        spatial_features = self.deep_residual_block(outputs_3D) # (t*b, c, w, h) 
-        nonspatial_features = self.nonspatial_block(outputs_3D) # (t*b, n_features)
+        spatial_features = self.deep_residual_block(outputs_3D) # (T*B, c, w, h) 
+        nonspatial_features = self.nonspatial_block(outputs_3D) # (T*B, n_features)
         
         return spatial_features, nonspatial_features, hidden_state, cell_state
-    
+
 class SpatialIMPALA_v2(SpatialIMPALA):
     """
     Same as SpatialIMPALA, but handles inputs of linear size 4 times smaller than the output size,
@@ -696,8 +703,8 @@ class SpatialIMPALA_v2(SpatialIMPALA):
             nn.ReLU(),
             nn.Conv2d(16, n_arguments, kernel_size=3, stride=1, padding=1)
         )
-        
-#############################################################################################################################
+
+""
 class ConditionedSpatialParameters(nn.Module):
     
     def __init__(self, linear_size):
@@ -719,7 +726,7 @@ class ConditionedSpatialParameters(nn.Module):
             arg_lst = [[yi.item(),xi.item()] for xi, yi in zip(x,y)]
         log_prob = log_probs[torch.arange(B), index]
         return arg_lst, log_prob, log_probs
-    
+
 class SpatialNet(nn.Module):
     
     def __init__(self, n_features, size=[16,16], n_channels=12):
@@ -781,7 +788,7 @@ class SpatialNet(nn.Module):
         arg = list(arg.detach().numpy())
         
         return arg, log_probs.view(self.size, self.size)[arg[0], arg[1]], log_probs
-    
+
 class OheNet(nn.Module):
     """Learns a vectorial state representation starting from a multi-channel image-like state."""
     

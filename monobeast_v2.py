@@ -56,7 +56,7 @@ parser.add_argument('--minimap_names', type=str, nargs='*', help='List of string
                     Overridden by select_all_layers=True', 
                     default=['visibility_map', 'camera'])
 parser.add_argument('--action_names', '-a_n', type=str, nargs='*', help='List of strings containing action names to use.', 
-                    default= ['move_camera', 'select_point', 'select_rect', 'select_idle_worker', 'select_army', 
+                    default= ['no_op','move_camera', 'select_point', 'select_rect', 'select_idle_worker', 'select_army', 
                               'Attack_screen','Attack_minimap', 'Build_Barracks_screen', 'Build_CommandCenter_screen',
                               'Build_Refinery_screen', 'Build_SupplyDepot_screen','Harvest_Gather_SCV_screen', 
                               'Harvest_Return_SCV_quick', 'HoldPosition_quick', 'Move_screen', 'Move_minimap',
@@ -167,16 +167,17 @@ def act(
 
         seed = actor_index ^ int.from_bytes(os.urandom(4), byteorder="little")
         sc_env = init_game(game_params['env'], flags.map_name, random_seed=seed)
-        obs_processer = IMPALA_ObsProcesser_v2(action_table=model.action_table, **game_params['obs_processer'])
+        obs_processer = IMPALA_ObsProcesser_v2(env=sc_env, action_table=model.action_table, **game_params['obs_processer'])
         env = environment.Environment_v2(sc_env, obs_processer, seed)
         # initial rollout starts here
         env_output = env.initial() 
+        new_res = model.spatial_processing_block.new_res
         agent_state = model.spatial_processing_block.conv_lstm._init_hidden(batch_size=1, 
-                                                                            image_size=(model.screen_res, model.screen_res)
+                                                                            image_size=(new_res,new_res)
                                                                            )
         
         with torch.no_grad():
-            agent_output, new_agent_state = model.actor_step(env_output, agent_state) 
+            agent_output, new_agent_state = model.actor_step(env_output, *agent_state[0]) 
 
         agent_state = agent_state[0] # _init_hidden yields [(h,c)], whereas actor step only (h,c)
         while True:
@@ -209,7 +210,7 @@ def act(
                 agent_state = new_agent_state 
             
                 with torch.no_grad():
-                    agent_output, new_agent_state = model.actor_step(env_output, [agent_state])
+                    agent_output, new_agent_state = model.actor_step(env_output, *agent_state)
                 
                 timings.time("model")
                 
@@ -262,14 +263,16 @@ def get_batch(
     batch = {
         key: torch.stack([buffers[key][m] for m in indices], dim=1) for key in buffers
     }
-    initial_agent_state = [torch.stack([initial_agent_state_buffers[m][i] for m in indices], axis=0)
+    initial_agent_state = [torch.stack([initial_agent_state_buffers[m][i][0] for m in indices], axis=0)
                       for i in range(2)]
+    #print("initial_agent_state[0].shape: ", initial_agent_state[0].shape)
     timings.time("batch")
     for m in indices:
         free_queue.put(m)
     timings.time("enqueue")
     batch = {k: t.to(device=flags.device, non_blocking=True) for k, t in batch.items()}
     initial_agent_state = [t.to(device=flags.device, non_blocking=True) for t in initial_agent_state]
+    print("initial_agent_state[0].shape: ", initial_agent_state[0].shape)
     timings.time("device")
     return batch, initial_agent_state
 
@@ -286,7 +289,11 @@ def learn(
     """Performs a learning (optimization) step."""
     with lock:
         
-        learner_outputs, unused_agent_state = model.learner_step(batch, initial_agent_state) 
+        print("batch['done'].shape: ", batch['done'].shape)
+        print("batch['done']: ", batch['done'])
+        print("batch['episode_return']: ", batch["episode_return"])
+        print("Episode returns: ",  batch["episode_return"][batch["done"]])
+        learner_outputs = model.learner_step(batch, initial_agent_state) 
         
         # Take final value function slice for bootstrapping.
         bootstrap_value = learner_outputs["baseline_trg"][-1] # V_learner(s_T)
@@ -446,9 +453,10 @@ def train(flags, game_params):  # pylint: disable=too-many-branches, too-many-st
 
     # Add initial RNN state.
     initial_agent_state_buffers = []
+    new_res = model.spatial_processing_block.new_res
     for _ in range(flags.num_buffers):
         state = model.spatial_processing_block.conv_lstm._init_hidden(batch_size=1, 
-                                                                      image_size=(model.screen_res, model.screen_res)
+                                                                      image_size=(new_res, new_res)
                                                                   )
         
         state = state[0] # [(h,c)] -> (h,c)
@@ -534,7 +542,7 @@ def train(flags, game_params):  # pylint: disable=too-many-branches, too-many-st
                 timings,
             )
             stats = learn(
-                flags, model, learner_model, batch, agent_state, optimizer , scheduler
+                flags, model, learner_model, batch, agent_state, optimizer, scheduler
             )
             timings.time("learn")
             with lock:
@@ -631,7 +639,6 @@ def train(flags, game_params):  # pylint: disable=too-many-branches, too-many-st
 # also this time it seems that is always working with the forward pass without a batch dimension 
 # (you have to add it manually when needed)
 
-@change_me
 def test(flags, game_params, num_episodes: int = 100):
     if flags.xpid is None:
         raise Exception("Specify a experiment id with --xpid. `latest` option not working.")
@@ -642,7 +649,7 @@ def test(flags, game_params, num_episodes: int = 100):
 
     sc_env = init_game(game_params['env'], flags.map_name)
     model = IMPALA_AC_v2(env=sc_env, device='cpu', **game_params['HPs']) # let's use cpu as default for test
-    obs_processer = IMPALA_ObsProcesser_v2(action_table=model.action_table, **game_params['obs_processer'])
+    obs_processer = IMPALA_ObsProcesser_v2(env=sc_env, action_table=model.action_table, **game_params['obs_processer'])
     env = environment.Environment_v2(sc_env, obs_processer)
     model.eval() # disable dropout
     checkpoint = torch.load(checkpointpath, map_location="cpu")
@@ -650,10 +657,16 @@ def test(flags, game_params, num_episodes: int = 100):
 
     observation = env.initial() # env.reset
     returns = []
-
+    # Init agent LSTM hidden state
+    new_res = model.spatial_processing_block.new_res
+    agent_state = model.spatial_processing_block.conv_lstm._init_hidden(batch_size=1, 
+                                                                            image_size=(new_res,new_res)
+                                                                           )
+    agent_state = agent_state[0] # _init_hidden yields [(h,c)], whereas actor step only (h,c)
+    
     while len(returns) < num_episodes:
         with torch.no_grad():
-            agent_outputs = model.actor_step(observation)
+            agent_outputs, agent_state = model.actor_step(observation, *agent_state) 
         observation = env.step(agent_outputs["sc_env_action"])
         if observation["done"].item():
             returns.append(observation["episode_return"].item())
@@ -694,8 +707,8 @@ def main(flags):
     screen_channels, minimap_channels, in_player = op.get_n_channels()
 
     HPs = dict(action_names=flags.action_names,
-               screen_channels=screen_channels, 
-               minimap_channels=minimap_channels,
+               screen_channels=screen_channels+1, # counting binary mask tiling
+               minimap_channels=minimap_channels+1, # counting binary mask tiling
                encoding_channels=32,
                in_player=in_player
               )

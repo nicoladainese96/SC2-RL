@@ -204,7 +204,7 @@ class ObsProcesser():
         mask = (layer!=0) 
         layer[mask] = np.log2(layer[mask])
         return layer.reshape((1,)+layer.shape[-2:]).astype(float), [name]
-    
+
 class FullObsProcesser(ObsProcesser):
     def __init__(self, screen_names=[], minimap_names=[], select_all=False):
         super().__init__(screen_names, minimap_names, select_all)
@@ -233,7 +233,7 @@ class FullObsProcesser(ObsProcesser):
         screen_channels, minimap_channels = super().get_n_channels()
         player_channels = len(self.useful_indexes)
         return screen_channels, minimap_channels, player_channels
-    
+
 class IMPALA_ObsProcesser(FullObsProcesser):
     def __init__(self, action_table, screen_names=[], minimap_names=[], select_all=False):
         super().__init__(screen_names, minimap_names, select_all)
@@ -247,7 +247,7 @@ class IMPALA_ObsProcesser(FullObsProcesser):
         """
         action_mask = ~torch.tensor([a in available_actions for a in self.action_table], dtype=torch.bool)
         return action_mask
-    
+
 class IMPALA_ObsProcesser_v2(IMPALA_ObsProcesser):
     def __init__(self, env, action_table, screen_names=[], minimap_names=[], select_all=False):
         super().__init__(action_table, screen_names, minimap_names, select_all)
@@ -284,7 +284,7 @@ class IMPALA_ObsProcesser_v2(IMPALA_ObsProcesser):
             last_action = 0
         else:
             last_action = last_action[0]
-        last_action_idx = np.where(IMP_op.action_table == last_action)[0] # (batch,)
+        last_action_idx = np.where(self.action_table == last_action)[0] # (batch,)
         return last_action_idx 
     
     def tile_binary_mask(self, spatial_layers, last_action_idx, screen=True):
@@ -320,6 +320,6 @@ class IMPALA_ObsProcesser_v2(IMPALA_ObsProcesser):
             return np.any(['screen' in n for n in names])
         else:
             return np.any(['minimap' in n for n in names])
-        
+
     
-        
+
