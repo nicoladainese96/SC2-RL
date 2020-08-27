@@ -285,6 +285,13 @@ class IMPALA_ObsProcesser_v2(IMPALA_ObsProcesser):
         else:
             last_action = last_action[0]
         last_action_idx = np.where(self.action_table == last_action)[0] # (batch,)
+        if len(last_action_idx) == 0:
+            # sometimes the environment translates an action like select_army in select_unit,
+            # which is not in the action_table, so last_action_idx will be an empty list,
+            # throwing an error in tile_binary_mask. I decided to map it to no_op if there is no
+            # correspondence
+            last_action_idx = [0]
+        
         return last_action_idx 
     
     def tile_binary_mask(self, spatial_layers, last_action_idx, screen=True):
