@@ -27,7 +27,7 @@ from pysc2.env import sc2_env
 from pysc2.lib import actions # used somewhere?
 
 debug=False
-inspection=True # does not work yet
+inspection=False # does not work yet
 
 def get_action_mask(available_actions, action_table):
     """
