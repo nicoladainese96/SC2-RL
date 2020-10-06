@@ -205,9 +205,9 @@ def plot_IMPALA_session(results, map_name, moving_average=False, average_window=
         plt.plot(n_epochs, average_score)
     else:
         plt.plot(n_epochs, score)
-    plt.title("Performance for %s"%map_name, fontsize=16)
-    plt.xlabel("Number of steps", fontsize=16)
-    plt.ylabel("Reward", fontsize=16)
+    plt.title("IMPALA performance for %s\n (Deep Architecture)"%map_name, fontsize=18)
+    plt.xlabel("Number of steps", fontsize=18)
+    plt.ylabel("Reward", fontsize=18)
     plt.show()
     
     ### plot critic loss ###

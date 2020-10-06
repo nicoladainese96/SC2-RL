@@ -461,7 +461,6 @@ class StateEncodingConvBlock(nn.Module):
     def __init__(self, res, in_channels, out_channels, kernel_size=4, stride=2, padding=1):
         super(StateEncodingConvBlock, self).__init__()
         new_res = (res - kernel_size + 2*padding)//stride + 1
-        self.new_res = new_res # useful info to access from outside the class
         self.net = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=padding),
             ResidualConvLayer(new_res, out_channels, kernel_size=3),
