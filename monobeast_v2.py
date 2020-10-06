@@ -272,7 +272,6 @@ def get_batch(
     timings.time("enqueue")
     batch = {k: t.to(device=flags.device, non_blocking=True) for k, t in batch.items()}
     initial_agent_state = [t.to(device=flags.device, non_blocking=True) for t in initial_agent_state]
-    print("initial_agent_state[0].shape: ", initial_agent_state[0].shape)
     timings.time("device")
     return batch, initial_agent_state
 
@@ -289,10 +288,6 @@ def learn(
     """Performs a learning (optimization) step."""
     with lock:
         
-        print("batch['done'].shape: ", batch['done'].shape)
-        print("batch['done']: ", batch['done'])
-        print("batch['episode_return']: ", batch["episode_return"])
-        print("Episode returns: ",  batch["episode_return"][batch["done"]])
         learner_outputs = model.learner_step(batch, initial_agent_state) 
         
         # Take final value function slice for bootstrapping.
