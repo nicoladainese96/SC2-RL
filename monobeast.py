@@ -77,7 +77,7 @@ parser.add_argument("--disable_checkpoint", action="store_true",
                     help="Disable saving checkpoint.")
 parser.add_argument("--savedir", default="./logs/torchbeast",
                     help="Root dir where experiment data will be saved.")
-parser.add_argument("--num_actors", default=4, type=int, metavar="N",
+parser.add_argument("--num_actors", default=2, type=int, metavar="N",
                     help="Number of actors (default: 4).")
 parser.add_argument("--total_steps", default=12000, type=int, metavar="T",
                     help="Total environment steps to train for.")
@@ -437,7 +437,10 @@ def train(flags, game_params):  # pylint: disable=too-many-branches, too-many-st
         actor_processes.append(actor)
 
     # only model loaded into the GPU ?
-    learner_model = IMPALA_AC(env=env, device='cuda', **game_params['HPs']).to(device=flags.device) 
+    if not flags.disable_cuda and torch.cuda.is_available():
+        learner_model = IMPALA_AC(env=env, device='cuda', **game_params['HPs']).to(device=flags.device) 
+    else:
+        learner_model = IMPALA_AC(env=env, device='cpu', **game_params['HPs']).to(device=flags.device) 
     
     if flags.optim == "Adam":
         optimizer = torch.optim.Adam(
