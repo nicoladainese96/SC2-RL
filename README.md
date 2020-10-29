@@ -1,10 +1,10 @@
 # SC2-RL
 
-Last update: 6/10/2020
+Last update: 29/10/2020
 
 Repository containing the code for my Master's Thesis "Deep Reinforcement Learning for StarCraft II Learning Environment", developed during internship at Aalto University under the supervision of Alexander Ilin and Rinu Boney.
 
-**tl;dr**: Adapted "Importance Weighted Actor-Learner Architecture" (IMPALA) from https://github.com/facebookresearch/torchbeast to StarCraft II Learning Environment (https://github.com/deepmind/pysc2). Approximately 16 times faster than A2C (also implemented here, but almost from scratch), works on all 7 minigames. Code in PyTorch.
+**tl;dr**: Adapted "Importance Weighted Actor-Learner Architecture" (IMPALA) from https://github.com/facebookresearch/torchbeast to StarCraft II Learning Environment (https://github.com/deepmind/pysc2). Approximately 16 times faster than A2C (also implemented here, but almost from scratch), works on all 7 minigames. Code in PyTorch. Pdf of the thesis available in the repository.
 
 ## Fast run
 
@@ -63,5 +63,6 @@ Looking at the comparison between our results with IMPALA and the DeepMind Fully
 
 
 If then we consider the advantage given by approximately two orders of magnitude more of training and by taking the maximum over 100 runs instead than over just 5, it is fair to expect that the IMPALA agent under the same conditions would match or surpass DeepMind best agent performance on all 4 minigames.
+
 
 
