@@ -591,7 +591,7 @@ def train(flags, game_params):  # pylint: disable=too-many-branches, too-many-st
 # also this time it seems that is always working with the forward pass without a batch dimension 
 # (you have to add it manually when needed)
 
-def test(flags, game_params, num_episodes: int = 100):
+def test(flags, game_params, num_episodes: int = 10):
     if flags.xpid is None:
         raise Exception("Specify a experiment id with --xpid. `latest` option not working.")
     else:
@@ -599,7 +599,12 @@ def test(flags, game_params, num_episodes: int = 100):
             os.path.expanduser("%s/%s/%s" % (flags.savedir, flags.xpid, "model.tar"))
         )
 
-    sc_env = init_game(game_params['env'], flags.map_name)
+    replay_dict = dict(
+        save_replay_episodes=1,
+        replay_dir='Replays/',
+        replay_prefix=flags.map_name
+    )
+    sc_env = init_game(game_params['env'], flags.map_name, **replay_dict)
     model = IMPALA_AC(env=sc_env, device='cpu', **game_params['HPs']) # let's use cpu as default for test
     obs_processer = IMPALA_ObsProcesser(action_table=model.action_table, **game_params['obs_processer'])
     env = environment.Environment(sc_env, obs_processer)
