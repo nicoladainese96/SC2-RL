@@ -26,6 +26,18 @@ Main parameters to play with:
 - `--batch_size` (keep it 2 times num_actors to be safe)
 - `--total_steps` (I will publish the minimum number of steps to train on each minigame together with the values of the parameters that I changed as soon as I run the experiments)
 
+## Running experiments on a cluster with SLURM
+
+To run experiments on a cluster to make multiple runs I used a batch job script for SLURM.
+
+This is pretty straightforward, except for the fact that in the cluster that I was using there was a glibc version not compatible with the StarCraft environment, so I needed to use a singularity with pytorch inside which was able to reconfigure the environment and access the tarCraft engine. Luckily the cluster that I used already had a singularity loadable, but you can make your own based on NVIDIA's docker images like pytorch/20.10-py3 available for free at https://ngc.nvidia.com/catalog/containers/nvidia:pytorch (I was using the 20.03 apparently).
+
+Once fixed that, a typical command for one of my runs would be
+
+> sbatch -c 20 --time 0-3 batch_job.sh --map_name MoveToBeacon --num_actors 20 --batch_size 20 --num_learner_threads 2 --num_buffers 40 --total_steps 600000 --savedir /scratch/$myproj/dainesn1/logs/torchbeast/ --learning_rate 0.0003 --optim RMSprop --xpid MoveToBeacon1
+
+where batch_job.sh can be found in this repository.
+
 ## Requirements
 Main requirements:
 - pysc2 (pip install pysc2 or see https://github.com/deepmind/pysc2)
@@ -79,7 +91,4 @@ Since I'm not currently working on this project anymore, I might not implement t
 
 **Known issues:**
 1. On monobeast_v2.py the spatial inputs have to be modified by adding a binary mask layer containing all ones if the last action was applied to that spatial space (e.g. if the last action was MoveScreen, we add a layer of ones to the screen state and a layer of zeros to the minimap state; if it was MoveMinimap we do the opposite; finally if it was a non-spatial action like SelectArmy, we add a binary mask of zeros both to the screen and the minimap states). The problem here as I understand it is that I'm restricting the action space to approximately 20 actions and my pre-processing pipeline is able to recognize if an action is applied to the screen, the minimap or neither of them only for these actions; however sometimes when the agent selects an action, the action gets translated to another action before being passed to the environment, so the next time-step the last action variable can contain actions out of the action space selected. This could be solved by setting to no-op every action out of the selected action space, but I still have to do that. One minigame in which the problem can be reproduced is FindAndDefeatZerglings.
-
-
-
 
