@@ -2,7 +2,7 @@
 
 Last update: 29/10/2020
 
-Repository containing the code for my Master's Thesis "Deep Reinforcement Learning for StarCraft II Learning Environment", developed during internship at Aalto University under the supervision of Alexander Ilin and Rinu Boney.
+Repository containing the code for my Master's Thesis **"Deep Reinforcement Learning for StarCraft II Learning Environment"**, developed during internship at Aalto University under the supervision of Alexander Ilin and Rinu Boney.
 
 **tl;dr**: Adapted "Importance Weighted Actor-Learner Architecture" (IMPALA) from https://github.com/facebookresearch/torchbeast to StarCraft II Learning Environment (https://github.com/deepmind/pysc2). Approximately 16 times faster than A2C (also implemented here, but almost from scratch), works on all 7 minigames. Code in PyTorch. Pdf of the thesis available in the repository.
 
@@ -63,6 +63,23 @@ Looking at the comparison between our results with IMPALA and the DeepMind Fully
 
 
 If then we consider the advantage given by approximately two orders of magnitude more of training and by taking the maximum over 100 runs instead than over just 5, it is fair to expect that the IMPALA agent under the same conditions would match or surpass DeepMind best agent performance on all 4 minigames.
+
+## Future developments and known issues
+
+Here there's a list of what I would have liked to do but I didn't have either the time or the resources to do it. 
+Also I report some issues of which I'm aware. 
+
+Since I'm not currently working on this project anymore, I might not implement these points and necessary fixes myself, but I'm open to collaborations, questions, explanations and so on, so feel free to open an issue if needed.
+
+**Possible developments:**
+1. Adapt the code from polybeast (https://github.com/facebookresearch/torchbeast) to the StarCraft II Learning Environment (SC2LE). This should enable multi-machine training and should use the GPU device also in the forward pass, similarly as what is done in the GA3C architecture (https://arxiv.org/abs/1611.06256)
+2. Train the Fully Convolutional agent on the last 3 minigames and see how long it takes to get decent results (I would say certainly more than 3 days with my setup).
+3. Train the control architecture from the paper **"Relational Deep Reinforcement Learning"** from DeepMind (https://arxiv.org/abs/1806.01830). This is already implemented in monobeast_v2.py (see from there all modules that are imported/different from monobeast.py), altough there is an issue with the action mask for some minigames (discussed more in depth below). I was able to train this architecture for CollectMineralShards for 6M steps (see Chapter 7.4 of the thesis), getting results similar to the one with the shallow Fully Convolutional architecture, but I expect that much better results can be obtained with more compute and a little bit of fine tuning on the entropy cost and learning rate.
+4. Implement and train the relational architecture from **"Relational Deep Reinforcement Learning"** and replicate the results. This actually I think would be very expensive, since they used 10 billions steps for each run, which is approximately 1000 times more the steps than the ones I was able to get with 3 compute days and the code from monobeast.
+
+**Known issues:**
+1. On monobeast_v2.py the spatial inputs have to be modified by adding a binary mask layer containing all ones if the last action was applied to that spatial space (e.g. if the last action was MoveScreen, we add a layer of ones to the screen state and a layer of zeros to the minimap state; if it was MoveMinimap we do the opposite; finally if it was a non-spatial action like SelectArmy, we add a binary mask of zeros both to the screen and the minimap states). The problem here as I understand it is that I'm restricting the action space to approximately 20 actions and my pre-processing pipeline is able to recognize if an action is applied to the screen, the minimap or neither of them only for these actions; however sometimes when the agent selects an action, the action gets translated to another action before being passed to the environment, so the next time-step the last action variable can contain actions out of the action space selected. This could be solved by setting to no-op every action out of the selected action space, but I still have to do that. One minigame in which the problem can be reproduced is FindAndDefeatZerglings.
+
 
 
 
