@@ -1,5 +1,7 @@
 ## Actor-Critic modules
 
+Last update: 29/10/2020
+
 List of files:
 - Layers.py implements some non-trivial layers, some of which were never used because they are from the relational architecture, which I never had the time to 
 implement.
